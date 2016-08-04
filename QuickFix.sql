@@ -1,891 +1,509 @@
-USE MASTER
+
+USE [master];
 GO
+/*
+Biztalt:https://blogs.msdn.microsoft.com/blogdoezequiel/2009/01/25/sql-best-practices-for-biztalk/
+Auto create statistics must be disabled
+Auto update statistics must be disabled
+MAXDOP (Max degree of parallelism) must be defined as 1 in both SQL Server 2000 and SQL Server 2005 in the instance in which BizTalkMsgBoxDB database exists
+*/
+DECLARE @DB_Exclude TABLE
+(DatabaseName sysname)
+--CRM Dynamics
+INSERT @DB_Exclude
+SELECT d.name
+FROM   sys.databases D
+WHERE  D.name IN ('MSCRM_CONFIG','OrganizationName_MSCRM');
+DECLARE @IsCRMDynamicsON BIT = 0
+SELECT TOP 1 @IsCRMDynamicsON = 1 
+FROM   sys.server_principals SP
+WHERE  SP.name = 'MSCRMSqlLogin'
+IF @IsCRMDynamicsON = 0 
+       SELECT TOP 1 @IsCRMDynamicsON = 1
+   FROM   @DB_Exclude
 
-SET NOCOUNT ON;
+--BizTalk
+INSERT @DB_Exclude
+SELECT d.name
+FROM   sys.databases D
+WHERE  D.name IN ('BizTalkMsgBoxDB','BizTalkRuleEngineDb','SSODB','BizTalkHWSDb','BizTalkEDIDb','BAMArchive','BAMStarSchema','BAMPrimaryImport','BizTalkMgmtDb','BizTalkAnalysisDb','BizTalkTPMDb');
 
-/* SQL Server Configuration Report  
 
-Created by Rudy Panigas on Jan 21, 2015 
+INSERT @DB_Exclude
+EXEC sp_MSforeachdb
 
-Jan 4,  2015 Version 1.0 - Initial build
-Jan 11, 2015 Version 1.1 - 1.7 - Corrected logic and verified on other versions of SQL Server
-Jan 21, 2015 Version 1.8 - Changed output format for better reading
-Jan 24, 2015 Version 1.9 -  Added linked server Detection of
-Jan 28, 2015 Version 2.0 - Added database collation, database mirroring, log shipping and SSRS information
+'
+use [?]
+SELECT TOP 1 DB_NAME()[DatabaseName]
+FROM   sys.database_principals DP
+WHERE  DP.type = ''R''
+              AND DP.name IN (''SPDataAccess'',''SPReadOnly'')'
 
------------------------ Version Control -------------------------------*/
-DECLARE @ScriptVersion CHAR(4)
-SET @ScriptVersion = 2.0 -- Version number of this script
-/*-------------------------------------------------------------------------*/
+             
 
-DECLARE 
-	  @CurrentDate NVARCHAR(50) -- Current data/time
-	, @SQLServerName NVARCHAR(50) --Set SQL Server Name
-	, @NodeName1 NVARCHAR(50) -- Name of node 1 if clustered
-	, @NodeName2 NVARCHAR(50) -- Name of node 2 if clustered
-	--, @NodeName3 NVARCHAR(50) /* -- remove remarks if more than 2 node cluster */
-	--, @NodeName4 NVARCHAR(50) /*-- remove remarks if more than 2 node cluster */
-	, @AccountName NVARCHAR(50) -- Account name used
-	, @StaticPortNumber NVARCHAR(50) -- Static port number
-	, @INSTANCENAME NVARCHAR(30) -- SQL Server Instance Name
-	, @VALUENAME NVARCHAR(20) -- Detect account used in SQL 2005, see notes below
-	, @KERB NVARCHAR(50) -- Is Kerberos used or not
-	, @DomainName NVARCHAR(50) -- Name of Domain
-	, @IP NVARCHAR(20)  -- IP address used by SQL Server
-	, @InstallDate NVARCHAR(20) -- Installation date of SQL Server
-	, @ProductVersion NVARCHAR(30) -- Production version
-	, @MachineName NVARCHAR(30) -- Server name
-	, @ServerName NVARCHAR(30) -- SQL Server name
-	, @Instance NVARCHAR(30) --  Instance name
-	, @EDITION NVARCHAR(30) --SQL Server Edition
-	, @ProductLevel NVARCHAR(20) -- Product level
-	, @ISClustered NVARCHAR(20) -- System clustered
-	, @ISIntegratedSecurityOnly NVARCHAR(50) -- Security level
-	, @ISSingleUser NVARCHAR(20) -- System in Single User mode
-	, @COLLATION NVARCHAR(30)  -- Collation type
-	, @physical_CPU_Count VARCHAR(4) -- CPU count
-	, @EnvironmentType VARCHAR(15) -- Physical or Virtual
-	, @MaxMemory NVARCHAR(10) -- Max memory
-	, @MinMemory NVARCHAR(10) -- Min memory
-	, @TotalMEMORYinBytes NVARCHAR(10) -- Total memory
-	, @ErrorLogLocation VARCHAR(500) -- location of error logs
-	, @TraceFileLocation VARCHAR(100) -- location of trace files
-	, @LinkServers VARCHAR(2) -- Number of linked servers found
+IF OBJECT_ID('tempdb..#TraceFlag') IS NOT NULL DROP TABLE #TraceFlag
+CREATE TABLE #TraceFlag(TraceFlag INT,Status INT,Global INT,Session INT)
+INSERT #TraceFlag
+exec('DBCC TRACESTATUS(-1)')
+  
+       DECLARE @ver nvarchar(128)
+       DECLARE @key varchar(8000)
+       DECLARE @ComptabilityLevel nvarchar(128)
 
-SET @CurrentDate = (SELECT GETDATE())
-SET @ServerName = (SELECT @@SERVERNAME)
-PRINT '		SQL Server Configuration Report - Version '+@ScriptVersion
-PRINT '	----------------------------------------------------'
-PRINT '	Report executed on '+@ServerName+' SQL Server at '+@CurrentDate
-PRINT ' '
 
---> SQL Server Settings <--
-PRINT '		** Loading sp_configure details **'
-PRINT ' '
-EXEC sp_configure 'show advanced options', 1;
-RECONFIGURE;
-SELECT 
-         [name]
-		,[description]
-		,[value] 
-		,[minimum] 
-		,[maximum] 
-		,[value_in_use]
-INTO #SQL_Server_Settings
-FROM master.sys.configurations;		
 
-EXEC sp_configure 'show advanced options', 0;
-RECONFIGURE;
-PRINT ' '
-PRINT '		**	sp_configure details loaded **'
-PRINT ' ';
+  /* declare variables */
+       DECLARE @InstanceNames nvarchar(100) = @@servicename
+       DECLARE @reg TABLE
+             (
+                    keyname CHAR(200) ,
+                    value VARCHAR(1000)
+             );
+       DECLARE @Tempreg TABLE
+             (
+                    keyname CHAR(200) ,
+                    value VARCHAR(1000)
+             );
+             IF OBJECT_ID('tempdb..#SR_reg') IS NOT NULL DROP TABLE #SR_reg
+       CREATE TABLE #SR_reg
+             (
+                    Service VARCHAR(1000),
+                    InstanceNames VARCHAR(1000),
+                    keyname CHAR(200) ,
+                    value VARCHAR(1000),
+                    CurrentInstance AS CASE WHEN InstanceNames = @@SERVICENAME THEN CONVERT(BIT,1) ELSE CONVERT(BIT,0) END
+             );
+       DECLARE @keyi VARCHAR(8000); -- Holds Registry Key Value
+             
+       DECLARE @SQLServiceNamei VARCHAR(8000);
+       DECLARE @AgentServiceNamei VARCHAR(8000);
 
--- Detecting setting
-----------------------------------------------------------------
-PRINT '		******** SQL Server Summary ********'
-PRINT ' '
-SET @SQLServerName = (SELECT @@ServerName) -- SQL Server name
-PRINT '	Detection of SQL Server name\Instance name --> '+@SQLServerName
-------------------------------------------------------------------------
-SET @InstallDate = (SELECT  createdate FROM sys.syslogins where sid = 0x010100000000000512000000)
-PRINT '	Detection of Installation Date --> '+@InstallDate
-------------------------------------------------------------------------
-SET @MachineName = (SELECT CONVERT(char(100), SERVERPROPERTY('MachineName'))) 
-PRINT '	Detection of Machine Name --> '+@MachineName
-------------------------------------------------------------------------
-IF (SELECT CONVERT(char(50), SERVERPROPERTY('InstanceName'))) IS NULL
-	SET @InstanceName = 'Default Instance'
-ELSE
-	SET @InstanceName = @InstanceName
-PRINT '	Detection of Instance Name --> '+@InstanceName
-SET @EDITION = (SELECT CONVERT(char(30), SERVERPROPERTY('EDITION')))
-PRINT '	Detection of Edition and BIT Level --> '+@EDITION 
-------------------------------------------------------------------------
-SET @ProductLevel = (SELECT CONVERT(char(30), SERVERPROPERTY('ProductLevel')))
-PRINT '	Detection of Production Service Pack Level --> '+@ProductLevel 
-SET @ProductVersion = (SELECT CONVERT(char(30), SERVERPROPERTY('ProductVersion')))
-PRINT '	Detection of Production Name --> '+@ProductVersion
-------------------------------------------------------------------------
-IF @ProductVersion LIKE '6.5%' SET @ProductVersion =  'SQL Server 6.5'
-IF @ProductVersion LIKE '7.0%' SET @ProductVersion =  'SQL Server 7'
-IF @ProductVersion LIKE '8.0%' SET @ProductVersion =  'SQL Server 2000'
-IF @ProductVersion LIKE '9.0%' SET @ProductVersion =  'SQL Server 2005'  
-IF @ProductVersion LIKE '10.0%'  SET @ProductVersion = 'SQL Server 2008' 
-IF @ProductVersion LIKE '10.50%' SET @ProductVersion = 'SQL Server 2008R2' 
-IF @ProductVersion LIKE '11.0%' SET @ProductVersion =  'SQL Server 2012' 
-IF @ProductVersion LIKE '12.0%' SET @ProductVersion =  'SQL Server 2014' 
---IF @ProductVersion LIKE '14.0%' SET @ProductVersion =  'SQL Server 2016'  -- for future use
---IF @ProductVersion LIKE '15.0%' SET @ProductVersion =  'SQL Server 2018'  -- for future use
-------------------------------------------------------------------------
-PRINT '	Detection of Production Version --> '+@ProductVersion 
-PRINT ' '
-------------------------------------------------------------------------
-SET @physical_CPU_Count = (SELECT cpu_count FROM sys.dm_os_sys_info)
-PRINT '	Detection of Logical CPU Count --> '+@physical_CPU_Count
-------------------------------------------------------------------------
-/* This section only works on SQL 2012 and higher */
+  
+  --BEGIN
+--Build Sql Server's full service name
+        SET @SQLServiceNamei = CASE WHEN @InstanceNames = 'MSSQLSERVER'
+                                    THEN 'MSSQLSERVER'
+                                    ELSE 'MSSQL$' + @InstanceNames
+                                END; 
 
---IF(SELECT virtual_machine_type FROM sys.dm_os_sys_info) = 1
---SET @EnvironmentType = 'Virtual'
---ELSE
---SET @EnvironmentType = 'Physical'
---PRINT '	Detection of Environment Type --> '+@EnvironmentType
-------------------------------------------------------------------------
-SET @MaxMemory = (select CONVERT(char(10), [value_in_use]) from  #SQL_Server_Settings where name = 'max server memory (MB)')
-SET @MinMemory = (select CONVERT(char(10), [value_in_use]) from  #SQL_Server_Settings where name = 'min server memory (MB)')
-PRINT '	Detection of Maximum Memory (Megabytes) --> '+@MaxMemory
-PRINT '	Detection of Minimum Memory (Megabytes) --> '+@MinMemory
-------------------------------------------------------------------------
-SELECT DEC.local_net_address INTO #IP FROM sys.dm_exec_connections AS DEC WHERE DEC.session_id = @@SPID;
-SET @IP = (SELECT DEC.Local_Net_Address FROM sys.dm_exec_connections AS DEC WHERE DEC.session_id = @@SPID)
-PRINT '	Detection of IP Address --> '+@IP;
-------------------------------------------------------------------------
-SET @StaticPortNumber = (SELECT local_tcp_port FROM sys.dm_exec_connections WHERE session_id = @@SPID)
-PRINT '	Detection of Port Number --> '+@StaticPortNumber
-PRINT ' '
-------------------------------------------------------------------------
-SET @DomainName = (SELECT DEFAULT_DOMAIN())
-PRINT '	Detection of Default Domain Name --> '+@DomainName
-------------------------------------------------------------------------
---For Service Account Name - This line will work on SQL 2008R2 and higher only
---SET @AccountName = (SELECT top 1 service_account FROM sys.dm_server_services)
---So the lines below are being used until SQL 2005 is removed/upgraded
-EXECUTE  master.dbo.xp_instance_regread
-		@rootkey      = N'HKEY_LOCAL_MACHINE',
-		@key          = N'SYSTEM\CurrentControlSet\Services\MSSQLServer',
-		@value_name   = N'ObjectName',
-		@value        = @AccountName OUTPUT
-PRINT '	Detection of Service Account name --> '+@AccountName
-------------------------------------------------------------------------
-IF (SELECT CONVERT(char(30), SERVERPROPERTY('ISClustered'))) = 1
-	SET @ISClustered = 'Clustered'
-ELSE
-	SET @ISClustered = 'Not Clustered'
-PRINT '	Detection of Clustered Status --> '+@ISClustered 
-------------------------------------------------------------------------
---cluster node names. Modify if there are more than 2 nodes in cluster
-SELECT NodeName INTO #nodes FROM sys.dm_os_cluster_nodes 
-	IF @@rowcount = 0 
-	BEGIN 
-		SET @NodeName1 = 'NONE' -- NONE for no cluster
-	END
-	ELSE
-	BEGIN
-		SET @NodeName1 = (SELECT top 1 NodeName from #nodes)
-		SET @NodeName2 = (SELECT NodeName from #nodes where NodeName <> @NodeName1)
-		-- Add code here if more that 2 node cluster
-    END
+        SET @keyi = 'SYSTEM\CurrentControlSet\Services\' + @SQLServiceNamei;
 
-IF @NodeName1 = 'NONE'
-BEGIN
-	PRINT '	Detection of Clustered --> SQL Server is not clustered'
-END
-ELSE
-BEGIN
-	PRINT '	Detection of cluster node 1 --> '+@NodeName1
-	PRINT '	Detection of cluster node 2 --> '+@NodeName2
-END
-PRINT ' '
-------------------------------------------------------------------------
-SELECT net_transport, auth_scheme INTO #KERBINFO FROM sys.dm_exec_connections WHERE session_id = @@spid
-IF @@rowcount = 0 
-	BEGIN 
-		SET @KERB = 'Kerberos not used in TCP network transport'
-	END
-	ELSE
-	BEGIN
-		SET @KERB = 'TCP is using Kerberos'
-	END
-PRINT '	Detection of Kerberos --> '+@KERB
-------------------------------------------------------------------------
-IF (SELECT CONVERT(char(30), SERVERPROPERTY('ISIntegratedSecurityOnly'))) = 1
-	SET @ISIntegratedSecurityOnly = 'Windows Authentication Security Mode'
-ELSE
-	SET @ISIntegratedSecurityOnly = 'SQL Server Authentication Security Mode'
-PRINT '	Detection of Security Mode --> '+@ISIntegratedSecurityOnly 
-------------------------------------------------------------------------
-DECLARE @AuditLevel int,
-				@AuditLvltxt VARCHAR(50)
-EXEC MASTER.dbo.xp_instance_regread N'HKEY_LOCAL_MACHINE', 
-					N'Software\Microsoft\MSSQLServer\MSSQLServer', N'AuditLevel', @AuditLevel OUTPUT
+             DELETE FROM @reg  
+--MSSQLSERVER Service Account
+        INSERT  INTO @reg EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'ObjectName';
+        UPDATE  @reg
+        SET     keyname = @SQLServiceNamei; 
+             INSERT #SR_reg
+                     ( Service, InstanceNames,keyname, value )
+             SELECT 'SQL Server Engine',@InstanceNames,'Account Name'  ,value FROM @reg;
+             
 
-SELECT @AuditLvltxt = CASE 
-		WHEN @AuditLevel = 0	THEN 'None'
-		WHEN @AuditLevel = 1	THEN 'Successful logins only'
-		WHEN @AuditLevel = 2	THEN 'Failed logins only'
-		WHEN @AuditLevel = 3	THEN 'Both successful and failed logins'
-		ELSE 'Unknown'
-		END
-PRINT '	Detection of Audit Level --> ' + @AuditLvltxt
-PRINT  ' '
-------------------------------------------------------------------------
-IF (SELECT CONVERT(char(30), SERVERPROPERTY('ISSingleUser'))) = 1
-	SET @ISSingleUser = 'Single User'
-ELSE
-	SET @ISSingleUser = 'Multi User'
-PRINT '	Detection of User Mode --> '+@ISSingleUser 
-------------------------------------------------------------------------
-SET @COLLATION = (SELECT CONVERT(char(30), SERVERPROPERTY('COLLATION')))
-PRINT '	Detection of Collation Type --> '+@COLLATION 
-------------------------------------------------------------------------
-SET @ErrorLogLocation = (SELECT REPLACE(CAST(SERVERPROPERTY('ErrorLogFileName') AS VARCHAR(500)), 'ERRORLOG',''))
-PRINT '	Detection of SQL Server Errorlog Location --> ' +@ErrorLogLocation
-------------------------------------------------------------------------
-SET @TraceFileLocation = (SELECT REPLACE(CONVERT(VARCHAR(100),SERVERPROPERTY('ErrorLogFileName')), '\ERRORLOG','\log.trc'))
-PRINT '	Detection of SQL Server Default Trace Location --> ' +@TraceFileLocation
-------------------------------------------------------------------------
-SET @LinkServers = (SELECT COUNT(*) FROM sys.servers WHERE is_linked ='1')
-PRINT '	Detection of Number of Link Servers --> ' +@LinkServers
-------------------------------------------------------------------------
-PRINT ' '
-PRINT '	Detection of SysAdmin Members'
-PRINT ' '
-IF (SELECT COUNT(*) FROM sys.server_principals) = 0
-BEGIN
-		PRINT '	** No	Sysadmin Users Detection of ** '
-END
-ELSE
-BEGIN
-	SELECT 'sysadmin' as 'Role'
-	,CONVERT (NVARCHAR(50), name) COLLATE DATABASE_DEFAULT AS 'Login\Member Name' 
-	FROM sys.server_principals
-	WHERE IS_SRVROLEMEMBER('sysadmin', name) = 1
-END
-PRINT ' '
-------------------------------------------------------------------------
-PRINT '	Detection of ServerAdmin Members'
-PRINT ' '
-IF (SELECT COUNT(*) FROM sys.server_principals WHERE (type ='R') and (name='serveradmin')) = 0
-	BEGIN 
-		PRINT '	** No ServerAdmin Users Detection of ** '
-	END
-ELSE
-BEGIN
-SELECT CONVERT (NVARCHAR(20),r.name) AS'Role'
-			, CONVERT (NVARCHAR(50),p.name)  AS 'Login\Member Name'
-  FROM	sys.server_principals r
-  JOIN	sys.server_role_members m  ON	r.principal_id = m.role_principal_id
-  JOIN	sys.server_principals p ON	p.principal_id = m.member_principal_id
- WHERE	(r.type ='R')and(r.name='serveradmin')
- END
-PRINT ' '
-------------------------------------------------------------------------
-PRINT '	Detection of configuration setting' 
-PRINT ' '
-SELECT [name] as 'Configuration Setting' ,(CONVERT (CHAR(20),[value_in_use] )) as 'Value in Use' FROM #SQL_Server_Settings
-------------------------------------------------------------------------
-PRINT '	Detection of code that automatically executes on startup'
-PRINT ' '
+             
+             -------------------------------------------------------------------------------
+             IF @InstanceNames = @@SERVICENAME
+             BEGIN
+                 SET @ver = CAST(serverproperty('ProductVersion') AS nvarchar)
+                    IF ( SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1) = '10' )
+                    BEGIN
+                           IF SUBSTRING(SUBSTRING(@ver, CHARINDEX('.', @ver)+1 , LEN(@ver)),1,CHARINDEX('.', SUBSTRING(@ver, CHARINDEX('.', @ver)+1 , LEN(@ver)))-1) = '50'
+                                 SELECT @ver = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1) + '_' + SUBSTRING(SUBSTRING(@ver, CHARINDEX('.', @ver)+1 , LEN(@ver)),1,CHARINDEX('.', SUBSTRING(@ver, CHARINDEX('.', @ver)+1 , LEN(@ver)))-1);
+                           ELSE SELECT @ver = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1)
+                    END
+   
+                    ELSE SELECT @ver = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1)
+             END
+                    
 
-IF (SELECT COUNT(*) FROM sys.procedures WHERE is_auto_executed = 1) = 0
-BEGIN 
-		PRINT '** No code that automatically execute on startup Detection of ** '
-END
-ELSE
-BEGIN
-SELECT CONVERT (NVARCHAR(35), name) AS 'Name'
-			, CONVERT (NVARCHAR(25), type_desc) AS 'Type'
-			,  create_date AS 'Created Date'
-			,  modify_date AS 'Modified Date'
-FROM sys.procedures
-WHERE is_auto_executed = 1
-END
-PRINT ' ';
-------------------------------------------------------------------------
-PRINT '	Detection of SQL Service Status' 
-PRINT ' '
---> SQL Server Services Status <--
-CREATE TABLE #RegResult
-(ResultValue NVARCHAR(4))
+             SET @keyi = CASE WHEN @InstanceNames = 'MSSQLSERVER'
+                                    THEN 'SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL' + @Ver + '.' + @InstanceNames + '\MSSQLServer\CurrentVersion'
+                                    ELSE 'SOFTWARE\Wow6432Node\Microsoft\Microsoft SQL Server\' + @InstanceNames + '\MSSQLServer\CurrentVersion'
+                                END; 
+             DELETE FROM @reg;
+             DELETE FROM @Tempreg; 
 
-CREATE TABLE #ServicesServiceStatus			
-( 
-	 RowID INT IDENTITY(1,1)
-	,ServerName NVARCHAR(30) 
-	,ServiceName NVARCHAR(45)
-	,ServiceStatus varchar(15)
-	,StatusDateTime DATETIME DEFAULT (GETDATE())
-	,PhysicalSrverName NVARCHAR(50)
-)
+        INSERT  INTO @Tempreg
+             EXECUTE xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'CurrentVersion';
+                    
+             SELECT @ver = value
+         FROM   @Tempreg;
 
-DECLARE 
-		 @ChkInstanceName nvarchar(128)				
-		,@ChkSrvName nvarchar(128)					
-		,@TrueSrvName nvarchar(128)					
-		,@SQLSrv NVARCHAR(128)						
-		,@PhysicalSrvName NVARCHAR(128)			
-		,@FTS nvarchar(128)						
-		,@RS nvarchar(128)							
-		,@SQLAgent NVARCHAR(128)				
-		,@OLAP nvarchar(128)					
-		,@REGKEY NVARCHAR(128)					
+             SET @ComptabilityLevel = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1) + SUBSTRING(SUBSTRING(@ver, CHARINDEX('.', @ver)+1,LEN(@ver) ), 1, 1);
+             IF ( SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1) = '10' )
+             BEGIN
+                    IF SUBSTRING(SUBSTRING(@ver, CHARINDEX('.', @ver)+1 , LEN(@ver)),1,CHARINDEX('.', SUBSTRING(@ver, CHARINDEX('.', @ver)+1 , LEN(@ver)))-1) = '50'
+                           SELECT @ver = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1) + '_' + SUBSTRING(SUBSTRING(@ver, CHARINDEX('.', @ver)+1 , LEN(@ver)),1,CHARINDEX('.', SUBSTRING(@ver, CHARINDEX('.', @ver)+1 , LEN(@ver)))-1);
+                    ELSE SELECT @ver = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1)
+             END
+   
+             ELSE SELECT @ver = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1)
 
-SET @PhysicalSrvName = CAST(SERVERPROPERTY('MachineName') AS VARCHAR(128)) 
-SET @ChkSrvName = CAST(SERVERPROPERTY('INSTANCENAME') AS VARCHAR(128)) 
-SET @ChkInstanceName = @@serverName
+----------------------------------------------------------------------------------------------------------------------------------
+             SET @key = 'SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL' + @Ver + '.' + @InstanceNames + '\Setup'
 
-IF @ChkSrvName IS NULL							
-	BEGIN 
-		SET @TrueSrvName = 'MSQLSERVER'
-		SELECT @OLAP = 'MSSQLServerOLAPService' 	
-		SELECT @FTS = 'MSFTESQL' 
-		SELECT @RS = 'ReportServer' 
-		SELECT @SQLAgent = 'SQLSERVERAGENT'
-		SELECT @SQLSrv = 'MSSQLSERVER'
-	END 
-ELSE
-	BEGIN
-		SET @TrueSrvName =  CAST(SERVERPROPERTY('INSTANCENAME') AS VARCHAR(128)) 
-		SET @SQLSrv = '$'+@ChkSrvName
-	 	SELECT @OLAP = 'MSOLAP' + @SQLSrv	/*Setting up proper service name*/
-		SELECT @FTS = 'MSFTESQL' + @SQLSrv 
-		SELECT @RS = 'ReportServer' + @SQLSrv
-		SELECT @SQLAgent = 'SQLAgent' + @SQLSrv
-		SELECT @SQLSrv = 'MSSQL' + @SQLSrv
-	END 
-;
-/* ---------------------------------- SQL Server Service Section ----------------------------------------------*/
-SET @REGKEY = 'System\CurrentControlSet\Services\'+@SQLSrv
+                    INSERT   @reg
+             EXECUTE xp_regread 'HKEY_LOCAL_MACHINE', @key, 'PatchLevel';
+                    
+             INSERT #SR_reg ( Service,InstanceNames, keyname, value )
+             SELECT 'SQL Server Engine Version',@InstanceNames,'Last Version Installed' ,value FROM @reg;
+                    
+             
+----------------------------------------------------------------------------------------------------------------------------------
+             DELETE FROM @reg;
+             SET @keyi = 'SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL' + @Ver + '.' + @InstanceNames + '\Setup'
+             INSERT  INTO @reg
+             EXECUTE xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'Edition';
 
-INSERT #RegResult ( ResultValue ) EXEC master.sys.xp_regread @rootkey='HKEY_LOCAL_MACHINE', @key=@REGKEY
+             INSERT #SR_reg ( Service,InstanceNames, keyname, value )
+             SELECT 'SQL Server Engine Edition',@InstanceNames,'Edition Installed' ,value FROM @reg;
+                    
+             
+----------------------------------------------------------------------------------------------------------------------------------
+             --Error Log file
+             DELETE FROM @reg;
+        SET @keyi = N'Software\Microsoft\Microsoft SQL Server\MSSQL' + @Ver + '.' + @InstanceNames + '\MSSQLServer'
 
-IF (SELECT ResultValue FROM #RegResult) = 1 
-BEGIN
-	INSERT #ServicesServiceStatus (ServiceStatus)		
-	EXEC xp_servicecontrol N'QUERYSTATE',@SQLSrv
-	UPDATE #ServicesServiceStatus set ServiceName = 'MS SQL Server Service' where RowID = @@identity
-	UPDATE #ServicesServiceStatus set ServerName = @TrueSrvName where RowID = @@identity
-	UPDATE #ServicesServiceStatus set PhysicalSrverName = @PhysicalSrvName where RowID = @@identity
-	TRUNCATE TABLE #RegResult
-END
-ELSE 
-BEGIN
-	INSERT INTO #ServicesServiceStatus (ServiceStatus) VALUES ('NOT INSTALLED')
-	UPDATE #ServicesServiceStatus set ServiceName = 'MS SQL Server Service' where RowID = @@identity
-	UPDATE #ServicesServiceStatus set ServerName = @TrueSrvName where RowID = @@identity
-	UPDATE #ServicesServiceStatus set PhysicalSrverName = @PhysicalSrvName where RowID = @@identity
-	TRUNCATE TABLE #RegResult
-END
+             INSERT  INTO @reg
+        EXECUTE xp_regread N'HKEY_LOCAL_MACHINE',@keyi, N'NumErrorLogs';
 
-/* ---------------------------------- SQL Server Agent Service Section -----------------------------------------*/
-SET @REGKEY = 'System\CurrentControlSet\Services\'+@SQLAgent
+             INSERT #SR_reg ( Service,InstanceNames, keyname, value )
+             SELECT 'SQL Server Number of Error Log files',@InstanceNames,'Number Error Logs' ,value FROM @reg;     
+                     
+                      
+----------------------------------------------------------------------------------------------------------------------------------
 
-INSERT #RegResult ( ResultValue ) EXEC master.sys.xp_regread @rootkey='HKEY_LOCAL_MACHINE', @key=@REGKEY
 
-IF (SELECT ResultValue FROM #RegResult) = 1 
-BEGIN
-	INSERT #ServicesServiceStatus (ServiceStatus)		
-	EXEC xp_servicecontrol N'QUERYSTATE',@SQLAgent
-	UPDATE #ServicesServiceStatus set ServiceName = 'SQL Server Agent Service' where RowID = @@identity
-	UPDATE #ServicesServiceStatus set ServerName = @TrueSrvName where RowID = @@identity
-	UPDATE #ServicesServiceStatus set PhysicalSrverName = @PhysicalSrvName where RowID = @@identity
-	TRUNCATE TABLE #RegResult
-END
-ELSE 
-BEGIN
-	INSERT INTO #ServicesServiceStatus (ServiceStatus) VALUES ('NOT INSTALLED')
-	UPDATE #ServicesServiceStatus set ServiceName = 'SQL Server Agent Service' where RowID = @@identity
-	UPDATE #ServicesServiceStatus set ServerName = @TrueSrvName where RowID = @@identity	
-	UPDATE #ServicesServiceStatus set PhysicalSrverName = @PhysicalSrvName where RowID = @@identity
-	TRUNCATE TABLE #RegResult
-END
 
-/* ---------------------------------- SQL Browser Service Section ----------------------------------------------*/
-SET @REGKEY = 'System\CurrentControlSet\Services\SQLBrowser'
+             DELETE FROM @reg;
 
-INSERT #RegResult ( ResultValue ) EXEC master.sys.xp_regread @rootkey='HKEY_LOCAL_MACHINE', @key=@REGKEY
 
-IF (SELECT ResultValue FROM #RegResult) = 1 
-BEGIN
-	INSERT #ServicesServiceStatus (ServiceStatus)		
-	EXEC master.dbo.xp_servicecontrol N'QUERYSTATE',N'sqlbrowser'
-	UPDATE #ServicesServiceStatus set ServiceName = 'SQL Browser Service - Instance Independent' where RowID = @@identity
-	UPDATE #ServicesServiceStatus set ServerName = @TrueSrvName where RowID = @@identity
-	UPDATE #ServicesServiceStatus set PhysicalSrverName = @PhysicalSrvName where RowID = @@identity
-	TRUNCATE TABLE #RegResult
-END
-ELSE 
-BEGIN
-	INSERT INTO #ServicesServiceStatus (ServiceStatus) VALUES ('NOT INSTALLED')
-	UPDATE #ServicesServiceStatus set ServiceName = 'SQL Browser Service - Instance Independent' where RowID = @@identity
-	UPDATE #ServicesServiceStatus set ServerName = @TrueSrvName where RowID = @@identity
-	UPDATE #ServicesServiceStatus set PhysicalSrverName = @PhysicalSrvName where RowID = @@identity
-	TRUNCATE TABLE #RegResult
-END
+             SET @key = 'SOFTWARE\Microsoft\Microsoft SQL Server\' + @ComptabilityLevel;
 
-/* ---------------------------------- Integration Service Section ----------------------------------------------*/
-SET @REGKEY = 'System\CurrentControlSet\Services\MsDtsServer'
+        INSERT  INTO @reg
+             EXECUTE xp_regread 'HKEY_LOCAL_MACHINE', @key, 'CustomerFeedback';
 
-INSERT #RegResult ( ResultValue ) EXEC master.sys.xp_regread @rootkey='HKEY_LOCAL_MACHINE', @key=@REGKEY
+             INSERT #SR_reg ( Service,InstanceNames, keyname, value )
+             SELECT 'SQL Server Customer Feedback',@InstanceNames,'Customer Feedback Enabled' ,value FROM @reg;
+             DELETE FROM @reg;
 
-IF (SELECT ResultValue FROM #RegResult) = 1 
-BEGIN
-	INSERT #ServicesServiceStatus (ServiceStatus)		
-	EXEC master.dbo.xp_servicecontrol N'QUERYSTATE',N'MsDtsServer'
-	UPDATE #ServicesServiceStatus set ServiceName = 'Integration Service - Instance Independent' where RowID = @@identity
-	UPDATE #ServicesServiceStatus set ServerName = @TrueSrvName where RowID = @@identity
-	UPDATE #ServicesServiceStatus set PhysicalSrverName = @PhysicalSrvName where RowID = @@identity
-	TRUNCATE TABLE #RegResult
-END
-ELSE 
-BEGIN
-	INSERT INTO #ServicesServiceStatus (ServiceStatus) VALUES ('NOT INSTALLED')
-	UPDATE #ServicesServiceStatus set ServiceName = 'Intergration Service - Instance Independent' where RowID = @@identity
-	UPDATE #ServicesServiceStatus set ServerName = @TrueSrvName where RowID = @@identity
-	UPDATE #ServicesServiceStatus set PhysicalSrverName = @PhysicalSrvName where RowID = @@identity
-	TRUNCATE TABLE #RegResult
-END
+        INSERT  INTO @reg
+             EXECUTE xp_regread 'HKEY_LOCAL_MACHINE', @key, 'EnableErrorReporting';
 
-/* ---------------------------------- Reporting Service Section ------------------------------------------------*/
-SET @REGKEY = 'System\CurrentControlSet\Services\'+@RS
+             INSERT #SR_reg ( Service,InstanceNames, keyname, value )
+             SELECT 'SQL Server Error Reporting',@InstanceNames,'Error Reporting Enabled' ,value FROM @reg;
 
-INSERT #RegResult ( ResultValue ) EXEC master.sys.xp_regread @rootkey='HKEY_LOCAL_MACHINE', @key=@REGKEY
+                    
+             
+----------------------------------------------------------------------------------------------------------------------------------
+        --SQLSERVERAGENT Service Account
+        SET @AgentServiceNamei = CASE WHEN @InstanceNames = 'MSSQLSERVER'
+                                        THEN 'SQLSERVERAGENT'
+                                        ELSE 'SQLAgent$' + @InstanceNames
+                                END; 
 
-IF (SELECT ResultValue FROM #RegResult) = 1 
-BEGIN
-	INSERT #ServicesServiceStatus (ServiceStatus)		
-	EXEC master.dbo.xp_servicecontrol N'QUERYSTATE',@RS
-	UPDATE #ServicesServiceStatus set ServiceName = 'Reporting Service' where RowID = @@identity
-	UPDATE #ServicesServiceStatus set ServerName = @TrueSrvName where RowID = @@identity
-	UPDATE #ServicesServiceStatus set PhysicalSrverName = @PhysicalSrvName where RowID = @@identity
-	TRUNCATE TABLE #RegResult
-END
-ELSE 
-BEGIN
-	INSERT INTO #ServicesServiceStatus (ServiceStatus) VALUES ('NOT INSTALLED')
-	UPDATE #ServicesServiceStatus set ServiceName = 'Reporting Service' where RowID = @@identity
-	UPDATE #ServicesServiceStatus set ServerName = @TrueSrvName where RowID = @@identity
-	UPDATE #ServicesServiceStatus set PhysicalSrverName = @PhysicalSrvName where RowID = @@identity
-	TRUNCATE TABLE #RegResult
-END
+        SET @keyi = 'SYSTEM\CurrentControlSet\Services\' + @AgentServiceNamei; 
+             
+        DELETE FROM @reg  
+        INSERT  INTO @reg
+                EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'ObjectName';
+       
+        UPDATE  @reg
+        SET     keyname = @AgentServiceNamei
+        WHERE   keyname = 'ObjectName';
+        INSERT #SR_reg
+                ( Service, InstanceNames,keyname, value )
+        SELECT 'SQL Server Agent',@InstanceNames,'Account Name' ,value FROM @reg;
+-------------------------
+        --Windows Power Plan
+        SET @keyi = 'SYSTEM\ControlSet001\Control\Power\User\PowerSchemes'--'SOFTWARE\Microsoft\Windows\CurrentVersion\explorer\ControlPanel\NameSpace\{025A5937-A6BE-4686-A844-36FE4BEC8B6D}'; 
+             
+        DELETE FROM @reg  
+        INSERT  INTO @reg
+                EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'ActivePowerScheme';--'PreferredPlan';
+       
+        INSERT #SR_reg
+                ( Service, InstanceNames,keyname, value )
+        SELECT 'Windows Power Plan',@InstanceNames,'Power Plan' ,CASE CONVERT(VARCHAR(50),value) 
+                           WHEN '381b4222-f694-41f0-9685-ff5bb260df2e' THEN 'Balanced'
+                           WHEN 'a1841308-3541-4fab-bc81-f71556f20b4a' THEN 'Power saver'
+                           WHEN '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c' THEN 'High performance'
+                           ELSE NULL END 
+         FROM   @reg;
 
-/* ---------------------------------- Analysis Service Section -------------------------------------------------*/
-IF @ChkSrvName IS NULL								
-	BEGIN 
-	SET @OLAP = 'MSSQLServerOLAPService'
-	END
-ELSE	
-	BEGIN
-	SET @OLAP = 'MSOLAP'+'$'+@ChkSrvName
-	SET @REGKEY = 'System\CurrentControlSet\Services\'+@OLAP
-END
+             
+-------------------------
 
-INSERT #RegResult ( ResultValue ) EXEC master.sys.xp_regread @rootkey='HKEY_LOCAL_MACHINE', @key=@REGKEY
+        DELETE FROM @reg  
+        
+        SET @keyi = CASE WHEN @InstanceNames = 'MSSQLSERVER'
+                            THEN 'SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL' + @Ver + '.' + @InstanceNames + '\MSSQLServer\Parameters'
+                            ELSE 'SOFTWARE\Wow6432Node\Microsoft\Microsoft SQL Server\' + @InstanceNames + '\MSSQLServer\Parameters'
+                        END; 
+        DELETE FROM @reg  
+        INSERT  INTO @reg EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs3';
+             INSERT  INTO @reg EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs4';
+             INSERT  INTO @reg EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs5';
+             INSERT  INTO @reg EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs6';
+             INSERT  INTO @reg EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs7';
+             INSERT  INTO @reg EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs8';
+             INSERT  INTO @reg EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs9';
+             INSERT  INTO @reg EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs10';
+             INSERT  INTO @reg EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs11';
+             INSERT  INTO @reg EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs12';
+             INSERT  INTO @reg EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs13';
+       
+        UPDATE  @reg
+        SET     keyname = @InstanceNames
+        WHERE   keyname like 'SQLArgs%';
+             
+        INSERT #SR_reg
+                ( Service, InstanceNames,keyname, value )
+        SELECT 'SQL Server Trace Flage',@InstanceNames,'Trace Flage' ,value FROM @reg;
 
-IF (SELECT ResultValue FROM #RegResult) = 1 
-BEGIN
-	INSERT #ServicesServiceStatus (ServiceStatus)		
-	EXEC master.dbo.xp_servicecontrol N'QUERYSTATE',@OLAP
-	UPDATE #ServicesServiceStatus set ServiceName = 'Analysis Services' where RowID = @@identity
-	UPDATE #ServicesServiceStatus set ServerName = @TrueSrvName where RowID = @@identity
-	UPDATE #ServicesServiceStatus set PhysicalSrverName = @PhysicalSrvName where RowID = @@identity
-	TRUNCATE TABLE #RegResult
-END
-ELSE 
-BEGIN
-	INSERT INTO #ServicesServiceStatus (ServiceStatus) VALUES ('NOT INSTALLED')
-	UPDATE #ServicesServiceStatus set ServiceName = 'Analysis Services' where RowID = @@identity
-	UPDATE #ServicesServiceStatus set ServerName = @TrueSrvName where RowID = @@identity
-	UPDATE #ServicesServiceStatus set PhysicalSrverName = @PhysicalSrvName where RowID = @@identity
-	TRUNCATE TABLE #RegResult
-END
+  --END
+  
+select 'PAGE VERIFY'[Type],db.name [Database Name],N'ALTER DATABASE [' + db.name + N'] SET PAGE_VERIFY CHECKSUM  WITH NO_WAIT;' [Script]
+from sys.databases db
+WHERE	db.state = 0
+		and db.is_read_only = 0
+		and db.page_verify_option != 2
+		and db.database_id > 4
+UNION ALL
+SELECT 'File Growth'[Type],db.name as database_name,N'ALTER DATABASE [' + db.name + N'] MODIFY FILE (NAME=[' + mf.name + N'], FILEGROWTH = ' + CASE mf.type_desc WHEN 'LOG' THEN '128MB' ELSE '256MB' END + ');'
+FROM   sys.master_files mf (NOLOCK)
+       INNER JOIN sys.databases db (NOLOCK) on mf.database_id = db.database_id
+WHERE  is_percent_growth=1
+		AND db.state = 0
+		AND db.is_read_only = 0
+UNION ALL
 
-/* ---------------------------------- Full Text Search Service Section -----------------------------------------*/
-SET @REGKEY = 'System\CurrentControlSet\Services\'+@FTS
+SELECT  'AUTO SHRINK'[Type],db.name,N'ALTER DATABASE ' + QUOTENAME(name) + ' SET AUTO_SHRINK OFF WITH NO_WAIT;' AS [To Execute]
+FROM    sys.databases db
+WHERE	db.state = 0
+		AND db.is_read_only = 0
+		AND is_auto_shrink_on = 1
 
-INSERT #RegResult ( ResultValue ) EXEC master.sys.xp_regread @rootkey='HKEY_LOCAL_MACHINE', @key=@REGKEY
+UNION ALL
 
-IF (SELECT ResultValue FROM #RegResult) = 1 
-BEGIN
-	INSERT #ServicesServiceStatus (ServiceStatus)		
-	EXEC master.dbo.xp_servicecontrol N'QUERYSTATE',@FTS
-	UPDATE #ServicesServiceStatus set ServiceName = 'Full Text Search Service' where RowID = @@identity
-	UPDATE #ServicesServiceStatus set ServerName = @TrueSrvName where RowID = @@identity
-	UPDATE #ServicesServiceStatus set PhysicalSrverName = @PhysicalSrvName where RowID = @@identity
-	TRUNCATE TABLE #RegResult
-END
-ELSE 
-BEGIN
-	INSERT INTO #ServicesServiceStatus (ServiceStatus) VALUES ('NOT INSTALLED')
-	UPDATE #ServicesServiceStatus set ServiceName = 'Full Text Search Service' where RowID = @@identity
-	UPDATE #ServicesServiceStatus set ServerName = @TrueSrvName where RowID = @@identity
-	UPDATE #ServicesServiceStatus set PhysicalSrverName = @PhysicalSrvName where RowID = @@identity
-	TRUNCATE TABLE #RegResult
-END
+SELECT  'CURSOR_DEFAULT'[Type],db.name,N'ALTER DATABASE ' + QUOTENAME(name) + ' SET CURSOR_DEFAULT  LOCAL WITH NO_WAIT;' AS [To Execute]
+FROM    sys.databases db
+WHERE	db.state = 0
+and db.is_read_only = 0
+AND is_local_cursor_default = 0
 
-SELECT ServerName as 'SQL Server\Instance Name'
-			, ServiceName as 'Service Name'
-			, ServiceStatus as 'Service Status'
-			, StatusDateTime as 'Status Date\Time'
-			FROM  #ServicesServiceStatus;		
-------------------------------------------------------------------------
-PRINT '	Detection of location of Database files'
-PRINT ' '
-	  
-SELECT CONVERT(NVARCHAR(3), database_id) AS 'Database ID'
-			, CONVERT(NVARCHAR(45), name) AS 'Database Name'
-			, CONVERT(NVARCHAR(100), physical_name) AS 'Physical Location'
-			, CONVERT(NVARCHAR(16), type_desc) AS 'Type'
-FROM sys.master_files 
-PRINT ' '
-------------------------------------------------------------------------
-PRINT '	Detection of Link Servers'
-SELECT * INTO #LinkInfo  FROM sys.servers WHERE is_linked ='1'
+UNION ALL
+SELECT  'Auto Create Statistics'[Type],db.name,N'ALTER DATABASE ' + QUOTENAME(name) + ' SET AUTO_CREATE_STATISTICS ON WITH NO_WAIT;' AS [To Execute]
+FROM    sys.databases db
+WHERE	db.state = 0
+		and db.is_read_only = 0
+		AND is_auto_create_stats_on = 0
+		AND db.name NOT IN(SELECT DatabaseName FROM    @DB_Exclude)
+UNION ALL
+SELECT  'Auto Create Statistics'[Type],db.name,N'ALTER DATABASE ' + QUOTENAME(name) + ' SET AUTO_CREATE_STATISTICS OFF WITH NO_WAIT;' AS [To Execute]
+FROM    sys.databases db
+WHERE	db.state = 0
+		and db.is_read_only = 0
+		AND is_auto_create_stats_on = 1
+		AND db.name IN(SELECT DatabaseName FROM @DB_Exclude)
+UNION ALL
+SELECT  'Auto Updtae Statistics'[Type],db.name,N'ALTER DATABASE ' + QUOTENAME(name) + ' SET AUTO_UPDATE_STATISTICS ON WITH NO_WAIT;' AS [To Execute]
+FROM    sys.databases db
+WHERE	db.state = 0
+		and db.is_read_only = 0
+		AND is_auto_update_stats_on = 0
+		AND db.name NOT IN(SELECT DatabaseName FROM    @DB_Exclude)
+UNION ALL
+SELECT  'Auto Updtae Statistics'[Type],db.name,N'ALTER DATABASE ' + QUOTENAME(name) + ' SET AUTO_UPDATE_STATISTICS OFF WITH NO_WAIT;' AS [To Execute]
+FROM    sys.databases db
+WHERE	db.state = 0
+		and db.is_read_only = 0
+		AND is_auto_update_stats_on = 1
+		AND db.name IN(SELECT DatabaseName FROM @DB_Exclude)
+UNION ALL
+select 'Configuration'[Type],@@SERVERNAME,'exec sp_configure ''' +  name + ''',1;
+reconfigure'
+from	sys.configurations
+WHERE	name = 'show advanced options'
+		and value = 0
+UNION ALL
+select 'Configuration'[Type],@@SERVERNAME,'exec sp_configure ''' +  name + ''',1;
+reconfigure'
+from	sys.configurations
+WHERE	name = 'backup compression default'
+		and value = 0
+UNION ALL
+select 'Configuration'[Type],@@SERVERNAME,'exec sp_configure ''' +  name + ''',1;
+reconfigure'
+FROM	sys.configurations
+WHERE	name = 'optimize for ad hoc workloads'
+		and value = 0
+UNION ALL
 
-SELECT 
-    CONVERT(nvarchar(25), name) as 'Name'
-  , CONVERT(nvarchar(25), product) as 'Product'
-  , CONVERT(nvarchar(25), provider) as 'Provider'
-  , CONVERT(nvarchar(25),data_source) as 'Data Source'
- /* Uncomment the following if you want more information */
-  --, CONVERT(nvarchar(20),location) as 'Location'     
-  --, CONVERT(nvarchar(20),provider_string) as 'Provider String'   
-  --, CONVERT(nvarchar(20),[catalog]) as 'Catalog'   
-  --,connect_timeout 
-  --,query_timeout 
-  --,is_linked 
-  --,is_remote_login_enabled 
-  --,is_rpc_out_enabled 
-  --,is_data_access_enabled
-  --,is_collation_compatible 
-  --,uses_remote_collation 
-  --,CONVERT(nvarchar(20),collation_name)  
-  --,lazy_schema_validation 
-  --,is_system 
-  --,is_publisher 
-  --,is_subscriber 
-  --,is_distributor 
-  --,is_nonsql_subscriber 
-  --,is_remote_proc_transaction_promotion_enabled 
-  --,modify_date
-FROM #LinkInfo
-IF @@rowcount = 0 
-BEGIN 
-		PRINT '** No link server connections Detection of ** '
-END
-------------------------------------------------------------------------
-PRINT ' ';
-PRINT '	Detection of Database Collation type'
-PRINT ' '
-PRINT ' Case sensitivity Descriptions'
-PRINT ' Case Insensitive = CI				Case Sensitive = CS'
-PRINT ' Accent Insensitive = AI			Accent Sensitive = AS'
-PRINT ' Kanatype Insensitive = null		Kanatype Sensitive = KS'
-PRINT ' Width Insensitive = null			Width Sensitive = WS'
-PRINT ' ';
-SELECT NAME, COLLATION_NAME INTO #Collation FROM sys.Databases ORDER BY DATABASE_ID ASC;
-SELECT 
-      CONVERT(nvarchar(35), name) as 'Database Name'
-	, CONVERT(nvarchar(35), COLLATION_NAME) as 'Collation Type'
-FROM #Collation
-PRINT ' ';
-------------------------------------------------------------------------
-PRINT '	Detection of Database Hard Drive Space Available'   
-PRINT ' '
-
-CREATE TABLE #HD_space
-	(Drive varchar(2) NOT NULL,
-	[MB free] int NOT NULL)
-
-INSERT INTO #HD_space(Drive, [MB free])
-EXEC master.sys.xp_fixeddrives;
-
-SELECT  CONVERT(nvarchar(45), sys.databases.name) as 'Database Name'
-			, CONVERT(VARCHAR,SUM(size)*8/1024) AS 'Total disk space (Megabytes)'
- FROM sys.databases 
-	JOIN sys.master_files 
-	ON sys.databases.database_id=sys.master_files.database_id
-GROUP BY sys.databases.name
-ORDER BY sys.databases.name 
-
-SELECT Drive AS 'Drive Letter'
-		   ,[MB free]  AS 'Free Disk Space (Megabytes)'
-		   FROM #HD_space
-	IF @@rowcount = 0 
-	BEGIN 
-		PRINT '** No Hard Drive Information ** '
-	END
-PRINT ' '
-------------------------------------------------------------------------
-PRINT '	Detection of Database Information'
-PRINT ' '
-SELECT 
-	 D.database_id
-	,D.[name]	
-	,D.[create_date]
-	,D.[compatibility_level] 
-	,D.[user_access_desc]
-	,D.[state_desc]
-	,D.[recovery_model_desc]
-INTO #Databases_Details
-FROM SYS.DATABASES D 
-INNER JOIN sys.master_files S
-ON D.database_id= S.database_id
-WHERE s.file_id = 1 
-
-SELECT 
-	 database_id AS 'Database ID'
-	,CONVERT(nvarchar(45), [name]) AS 'Name'
-	,CONVERT(nvarchar(5), [compatibility_level]) AS 'Compatibility'
-	,CONVERT(nvarchar(15), [user_access_desc]) AS 'User Access'
-	,CONVERT(nvarchar(10), [state_desc]) AS 'Status'
-	,CONVERT(nvarchar(10), [recovery_model_desc]) AS 'Recovery Model'
-FROM #Databases_Details;
-------------------------------------------------------------------------
-PRINT '	Detection of Database Backup Information'
-PRINT ' '
-SELECT 	
-	B.name as Database_Name
-	, ISNULL(STR(ABS(DATEDIFF(day, GetDate()
-	, MAX(Backup_finish_date))))
-	, 'NEVER') as DaysSinceLastBackup
-	, ISNULL(Convert(char(10)
-	, MAX(backup_finish_date)
-	, 101)
-	, 'NEVER') as LastBackupDate
-INTO #Last_Backup_Dates FROM master.dbo.sysdatabases B 
-LEFT OUTER JOIN msdb.dbo.backupset A 
-ON A.database_name = B.name AND A.type = 'D' 
-GROUP BY B.Name 
-ORDER BY B.name;
-
-SELECT 
-	 CONVERT(nvarchar(45),Database_Name) AS 'Database Name'
-	,DaysSinceLastBackup AS 'Days Since Backup Date'
-	,LastBackupDate AS 'Last Date Backed Up'
- FROM #Last_Backup_Dates
-	IF @@rowcount = 0 
-	BEGIN 
-		PRINT '** No SQL Backup Information ** '
-	END;
-------------------------------------------------------------------------
-PRINT '	Detection of SQL Job Status'
-PRINT ' '
-SELECT name INTO #Failed_SQL_Jobs FROM msdb.dbo.sysjobs A, msdb.dbo.sysjobservers B 
-WHERE A.job_id = B.job_id AND B.last_run_outcome = 0 ;
-
-IF (SELECT COUNT(*) FROM #Failed_SQL_Jobs) = 0 
-	BEGIN 
-		PRINT '** No SQL Job Information ** '
-		PRINT ' '
-	END
-BEGIN
-	SELECT CONVERT(nvarchar(75), name) AS 'SQL Job Name' FROM #Failed_SQL_Jobs
-END
-------------------------------------------------------------------------
-SELECT name INTO #Disabled_Jobs FROM msdb.dbo.sysjobs 
-WHERE enabled = 0 ORDER BY name;
-
-SELECT CONVERT(nvarchar(75), name) AS 'Disabled SQL Jobs' FROM #Disabled_Jobs
-	IF @@rowcount = 0 
-	BEGIN 
-		PRINT '** No Disabled Job Information ** '
-	END;
-PRINT ' '
-------------------------------------------------------------------------
-PRINT '	Detection of SQL Mail Information'
-PRINT ' '
-CREATE TABLE #Database_Mail_Details
-(Status NVARCHAR(7))
-
-IF EXISTS(SELECT * FROM master.sys.configurations WHERE configuration_id = 16386 AND value_in_use =1)
-BEGIN
-INSERT INTO #Database_Mail_Details (Status)
-Exec msdb.dbo.sysmail_help_status_sp
-END
-
-CREATE TABLE #Database_Mail_Details2
-	(principal_id VARCHAR(4)
-	,principal_name VARCHAR(35)
-	,profile_id VARCHAR(4)
-	,profile_name VARCHAR(35)
-	,is_default VARCHAR(4))
-
-INSERT INTO #Database_Mail_Details2
-	(principal_id
-	,principal_name
-	,profile_id
-	,profile_name
-	,is_default)
-EXEC msdb.dbo.sysmail_help_principalprofile_sp ;
-
-IF (SELECT COUNT (*) FROM #Database_Mail_Details) = 0
-BEGIN
-		PRINT '** No Database Mail Service Status Information ** '
-END
-ELSE
-BEGIN
-	SELECT [Status] AS 'Database Mail Service Status' FROM #Database_Mail_Details
-END;
-PRINT ' '
-
-SELECT 
-		principal_id  
-		, principal_name
-		,profile_id
-		,profile_name
-		,is_default
- FROM #Database_Mail_Details2
-	IF @@rowcount = 0 
-	BEGIN 
-		PRINT ' ** No SQL Mail Service Details Information **'
-
-	END;
-PRINT ' '
-------------------------------------------------------------------------
-PRINT '	Detection of Database Mirroring Status'
-PRINT ' '
-SELECT DB.name,
-CASE
-    WHEN MIRROR.mirroring_state is NULL THEN 'Database Mirroring not configured and/or set'
-    ELSE 'Mirroring is configured and/or set'
-END AS MirroringState
-INTO #Database_Mirror_Stats
-FROM sys.databases DB INNER JOIN sys.database_mirroring MIRROR
-ON DB.database_id=MIRROR.database_id WHERE DB.database_id > 4 ORDER BY DB.NAME;
-
-IF (SELECT COUNT(*) FROM #Database_Mirror_Stats) = 0
-BEGIN
-		PRINT ' ** No Mirroring Information Detection of **'
-		PRINT ' '
-END
-ELSE
-BEGIN
-	SELECT CONVERT(nvarchar(35),name) AS 'Database Name'
-			,MirroringState AS 'Mirroring State'
-	FROM #Database_Mirror_Stats
-END;
-	
-SELECT db_name(database_id) as 'Mirror DB_Name', 
-	CASE mirroring_state 
-		WHEN 0 THEN 'Suspended' 
-		WHEN 1 THEN 'Disconnected from other partner' 
-		WHEN 2 THEN 'Synchronizing' 
-		WHEN 3 THEN 'Pending Failover' 
-		WHEN 4 THEN 'Synchronized' 
-		WHEN null THEN 'Database is inaccesible or is not mirrored' 
-	END as 'Mirroring_State', 
-	CASE mirroring_role 
-		WHEN 1 THEN 'Principal' 
-		WHEN 2 THEN 'Mirror' 
-		WHEN null THEN 'Database is not mirrored or is inaccessible' 
-	END as 'Mirroring_Role', 
-	CASE mirroring_safety_level 
-		WHEN 0 THEN 'Unknown state' 
-		WHEN 1 THEN 'OFF (Asynchronous)' 
-		WHEN 2 THEN 'FULL (Synchronous)' 
-		WHEN null THEN 'Database is not mirrored or is inaccessible' 
-	END as 'Mirror_Safety_Level', 
-	Mirroring_Partner_Name as 'Mirror_Endpoint', 
-	Mirroring_Partner_Instance as 'Mirror_ServerName', 
-	Mirroring_Witness_Name as 'Witness_Endpoint', 
-	CASE Mirroring_Witness_State 
-		WHEN 0 THEN 'Unknown' 
-		WHEN 1 THEN 'Connected' 
-		WHEN 2 THEN 'Disconnected' 
-		WHEN null THEN 'Database is not mirrored or is inaccessible' 
-	END as 'Witness_State', 
-	Mirroring_Connection_Timeout as 'Failover Timeout in seconds', 
-	Mirroring_Redo_Queue, 
-	Mirroring_Redo_Queue_Type 
-	INTO #DB_Mirror_Details
-	FROM sys.Database_mirroring WHERE mirroring_role is not null;
-
-IF (SELECT COUNT(*) FROM #DB_Mirror_Details) = 0
-BEGIN 
-	PRINT ' ** No Mirroring Configuration Information Detection of**'
-END
-ELSE
-BEGIN
-	SELECT * FROM #DB_Mirror_Details
-END
-PRINT ' '
-------------------------------------------------------------------------
-PRINT '	Detection of Database Log Shipping Status'
-PRINT ' '
-CREATE TABLE #LogShipping
-	([status] BIT
-	, [is_primary] BIT
-	, [server] sysname
-	, [database_name] sysname
-	, [time_since_last_backup] INT
-	, [last_backup_file] NVARCHAR(50)
-	, [backup_threshold] INT
-	, [is_backup_alert_enabled] BIT
-	, [time_since_last_copy] INT
-	, [last_copied_file] NVARCHAR(50)
-	, [time_since_last_restore] INT
-	, [last_restored_file]  NVARCHAR(50)
-	, [last_restored_latency] INT
-	, [restore_threshold] INT
-	, [is_restore_alert_enabled] BIT)
-INSERT INTO #LogShipping
-EXEC sp_help_log_shipping_monitor;
-
-IF (SELECT COUNT(*) FROM #LogShipping) = 0
-	BEGIN 
-		PRINT '** No Database Log Shipping Information Detection of ** '
-	END
-	ELSE
-	BEGIN
-		SELECT * FROM #LogShipping
-	END
-PRINT ' ';
-------------------------------------------------------------------------
-PRINT '	Detection of Report Server (SSRS) Reports Information <--'
-PRINT ' '
-
-IF EXISTS (SELECT name FROM sys.databases where name = 'ReportServer')
-BEGIN
-IF (SELECT COUNT(*) FROM reportserver.dbo.Catalog) = 0
-	BEGIN 
-		PRINT '** No Report Server (SSRS) Reports Information ** '
-	END
-	ELSE
-	BEGIN
-		SELECT CONVERT(nvarchar(20),Rol.RoleName) AS 'Role Name'
-		,CONVERT(nvarchar(35),Us.UserName) AS 'User Name'
-		,CONVERT(nvarchar(35),Cat.[Name]) AS 'Report Name'
-		,CASE Cat.Type WHEN 1 THEN 'Folder' WHEN 2 THEN 'Report' 
-			WHEN 3 THEN 'Resource' WHEN 4 THEN 'Linked Report' 
-			WHEN 3 THEN 'Data Source' ELSE '' END AS 'Catalog Type'
-		,CONVERT(nvarchar(35),Cat.Description) AS'Description'
-		FROM reportserver.dbo.Catalog Cat 
-		INNER JOIN reportserver.dbo.Policies Pol ON Cat.PolicyID = Pol.PolicyID
-		INNER JOIN reportserver.dbo.PolicyUserRole PUR ON Pol.PolicyID = PUR.PolicyID 
-		INNER JOIN reportserver.dbo.Users Us ON PUR.UserID = Us.UserID 
-		INNER JOIN reportserver.dbo.Roles Rol ON PUR.RoleID = Rol.RoleID
-		WHERE   Cat.Type in (1,2)
-		ORDER BY Cat.PATH 
-	END
-END
-ELSE
-	BEGIN 
-		PRINT '** No SSRS Reports Information Detection of ** '
-	END
-------------------------------------------------------------------------
--- Performing clean up
-DROP TABLE #KERBINFO;
-DROP TABLE #nodes;
-DROP TABLE #IP;
-DROP TABLE #SQL_Server_Settings;
-DROP TABLE #ServicesServiceStatus;	
-DROP TABLE #RegResult;	
-DROP TABLE #LinkInfo;
-DROP TABLE #Collation;
-DROP TABLE #HD_space;
-DROP TABLE #Last_Backup_Dates;
-DROP TABLE #Failed_SQL_Jobs;
-DROP TABLE #Disabled_Jobs;
-DROP TABLE #Database_Mail_Details;
-DROP TABLE #Database_Mail_Details2;
-DROP TABLE #Database_Mirror_Stats;
-DROP TABLE #DB_Mirror_Details;
-DROP TABLE #LogShipping;
-DROP TABLE #Databases_Details;
-
+select 'Configuration'[Type],@@SERVERNAME,'exec sp_configure ''' +  name + ''',1;
+reconfigure'
+FROM	sys.configurations
+WHERE	name = 'Database Mail XPs'
+		and value = 0
+UNION ALL
+select 'Configuration'[Type],@@SERVERNAME,'exec sp_configure ''' +  name + ''',50;
+reconfigure'
+FROM	sys.configurations
+WHERE	name = 'cost threshold for parallelism'
+		and value = 5
+UNION ALL
+select 'Configuration'[Type],@@SERVERNAME,'exec sp_configure ''' +  name + ''',0;
+reconfigure'
+FROM	sys.configurations
+WHERE	name = 'max degree of parallelism'
+		and value != 0
+        AND NOT EXISTS (SELECT DatabaseName FROM @DB_Exclude)
+        AND @IsCRMDynamicsON = 0
+UNION ALL
+select 'Configuration'[Type],@@SERVERNAME,'exec sp_configure ''' +  name + ''',1;
+reconfigure'
+FROM	sys.configurations
+WHERE	name = 'max degree of parallelism'
+		and value != 1
+        AND( EXISTS (SELECT DatabaseName FROM @DB_Exclude) OR @IsCRMDynamicsON = 1)
+UNION ALL
+select 'Configuration'[Type],@@SERVERNAME,'exec sp_configure ''' +  name + ''',1;
+reconfigure'
+FROM	sys.configurations
+WHERE	name = 'remote admin connections'
+		and value = 0
+union all 
+select 'Jobs' , @@SERVERNAME,'EXEC msdb.dbo.sp_update_job @job_id=N''' + CONVERT(nvarchar(36),job_id) + ''',@owner_login_name=N''sa'''
+from   msdb..sysjobs
+WHERE  owner_sid != 0x01
+union all 
+select 'SQL Error Log' , @@SERVERNAME,'USE [master]
 GO
-------------------------------------------------------------------------
-PRINT ' '
-PRINT '		End of SQL Server Configuration Report'
+EXEC xp_instance_regwrite N''HKEY_LOCAL_MACHINE'', N''Software\\Microsoft\\MSSQLServer\\MSSQLServer'', N''NumErrorLogs'', REG_DWORD, 30' WHERE exists (select top 1 1 from #SR_reg WHERE keyname = 'Number Error Logs' and CurrentInstance = 1 and value < 30)
+
+union all 
+select 'SQL Error Log' , @@SERVERNAME, 'BEGIN TRANSACTION
+DECLARE @ReturnCode INT
+SELECT @ReturnCode = 0
+/****** Object:  JobCategory [DBA]    Script Date: 26/07/2016 12:44:04 ******/
+IF NOT EXISTS (SELECT name FROM msdb.dbo.syscategories WHERE name=N''DBA'' AND category_class=1)
+BEGIN
+EXEC @ReturnCode = msdb.dbo.sp_add_category @class=N''JOB'', @type=N''LOCAL'', @name=N''DBA''
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+
+END
+
+DECLARE @jobId BINARY(16)
+EXEC @ReturnCode =  msdb.dbo.sp_add_job @job_name=N''_Admin_ :: CycleErrorLog'', 
+             @enabled=1, 
+             @notify_level_eventlog=0, 
+             @notify_level_email=0, 
+             @notify_level_netsend=0, 
+             @notify_level_page=0, 
+             @delete_level=0, 
+             @description=N''sp_cycle_errorlog.'', 
+             @category_name=N''DBA'', 
+             @owner_login_name=N''sa'', @job_id = @jobId OUTPUT
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+/****** Object:  Step [CycleErrorLog]    Script Date: 26/07/2016 12:44:04 ******/
+EXEC @ReturnCode = msdb.dbo.sp_add_jobstep @job_id=@jobId, @step_name=N''CycleErrorLog'', 
+             @step_id=1, 
+             @cmdexec_success_code=0, 
+             @on_success_action=1, 
+             @on_success_step_id=0, 
+             @on_fail_action=2, 
+             @on_fail_step_id=0, 
+             @retry_attempts=0, 
+             @retry_interval=0, 
+             @os_run_priority=0, @subsystem=N''TSQL'', 
+             @command=N''EXEC sp_cycle_errorlog;'', 
+             @database_name=N''master'', 
+             @flags=0
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+EXEC @ReturnCode = msdb.dbo.sp_update_job @job_id = @jobId, @start_step_id = 1
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+EXEC @ReturnCode = msdb.dbo.sp_add_jobschedule @job_id=@jobId, @name=N''MidNight'', 
+             @enabled=1, 
+             @freq_type=4, 
+             @freq_interval=1, 
+             @freq_subday_type=1, 
+             @freq_subday_interval=0, 
+             @freq_relative_interval=0, 
+             @freq_recurrence_factor=0, 
+             @active_start_date=20140331, 
+             @active_end_date=99991231, 
+             @active_start_time=1, 
+             @active_end_time=235959, 
+             @schedule_uid=N''994a993a-227f-463f-9742-f2cba8623403''
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+EXEC @ReturnCode = msdb.dbo.sp_add_jobserver @job_id = @jobId, @server_name = N''(local)''
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+COMMIT TRANSACTION
+GOTO EndSave
+QuitWithRollback:
+    IF (@@TRANCOUNT > 0) ROLLBACK TRANSACTION
+EndSave:' WHERE NOT EXISTS (SELECT TOP 1 1 FROM MSDB.[dbo].[sysjobs] WHERE name = '_Admin_ :: CycleErrorLog') AND exists (select top 1 1 from #SR_reg WHERE keyname = 'Number Error Logs' and CurrentInstance = 1 and value < 30)
+UNION ALL
+select 'Windows Power Plan' , @@SERVERNAME,'USE [master]
 GO
+EXEC xp_instance_regwrite N''HKEY_LOCAL_MACHINE'', N''SYSTEM\\ControlSet001\\Control\\Power\\User\\PowerSchemes'', N''ActivePowerScheme'', REG_SZ, ''8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c''' Script
+WHERE EXISTS (SELECT TOP 1 1 FROM #SR_reg WHERE CurrentInstance = 1 AND keyname = 'Power Plan' AND value != 'High performance')
+UNION ALL
+select 'tempdb' , @@SERVERNAME,case when mf.database_id is null then    'USE [master]
+GO
+ALTER DATABASE [tempdb] ADD FILE ( NAME = N''tempdev' + convert(varchar(3),Num.n) + ''', FILENAME = N''' + FileName + ''' , SIZE = ' + maxS.size + ' , FILEGROWTH = ' + f1.growth + ' )
+GO'
+when MakeSameSize.Script is not null then MakeSameSize.Script
+else null end
+from   (select 1 n
+union all
+select 2 n
+union all
+select 3 n
+union all
+select 4 n
+union all
+select 5 n
+union all
+select 6 n
+union all
+select 7 n
+union all
+select 8 n)Num
+cross apply (select top 1 LEFT(physical_name,LEN(physical_name) - charindex('\',reverse(physical_name),1) + 1) + REPLACE(REVERSE(LEFT(REVERSE(physical_name),CHARINDEX('\', REVERSE(physical_name), 1) - 1)),'.mdf',
+                                        convert(varchar(3),Num.n) +'.ndf') FileName,
+                                        name,
+                                        physical_name,
+                                        size,
+                                        case when is_percent_growth = 0 then convert(varchar(50),growth * 8) +'KB' ELSE '%'END growth 
+                FROM	sys.master_files imf 
+					WHERE	database_id = 2 
+							AND file_id = 1)f1
+cross apply (select convert(varchar(50),max(size*8/1024))+'MB' size,max(size) OriginalSize from sys.master_files imf WHERE database_id = 2 AND imf.type = 0)maxS
+left join sys.master_files mf on case when mf.file_id > 1 then mf.file_id - 1 else 1 end = Num.n
+and database_id = 2
+             and type = 0
+outer apply(select top 1 'ALTER DATABASE [tempdb] MODIFY FILE ( NAME = N''' + mf.name + ''', SIZE = '+ maxS.size + ');' Script WHERE maxS.OriginalSize!=mf.size)MakeSameSize
+WHERE  Num.n <= (select case when cpu_count > 8 then 8 else cpu_count end from sys.dm_os_sys_info)
+             and (mf.database_id is null or MakeSameSize.Script is not null)
+union all 
+SELECT 'TraceFlag' , @@SERVERNAME,'USE [master]
+GO
+EXEC xp_instance_regwrite N''HKEY_LOCAL_MACHINE'', N''SOFTWARE\\Microsoft\Microsoft SQL Server\\MSSQL' + @Ver + '.' + @InstanceNames + '\\MSSQLServer\\Parameters'', N''SQLArg' +CONVERT(VARCHAR(10),N.Num + ROW_NUMBER() OVER (ORDER BY N.Num)) + ''', REG_SZ, ''' + M.TraceFlag + '''' Script
+FROM   (SELECT '-t1117' TraceFlag
+UNION ALL SELECT '-t1118') M
+             LEFT JOIN (
+                                 select *
+                             FROM sys.dm_server_registry WHERE registry_key = 'HKLM\Software\Microsoft\Microsoft SQL Server\MSSQL' + @Ver + '.' + @InstanceNames + '\MSSQLServer\Parameters' and value_name like 'SQLArg%'
+                                 and value_name not in ('SQLArg0','SQLArg1','SQLArg2')
+                                 and convert(varchar(20),value_data) like '-t%') TF ON CONVERT(VARCHAR(50),TF.value_data) = M.TraceFlag
+CROSS JOIN (select top 1 value_name,replace(value_name,'SQLArg','') Num from sys.dm_server_registry WHERE registry_key = 'HKLM\Software\Microsoft\Microsoft SQL Server\MSSQL' + @Ver + '.' + @InstanceNames + '\MSSQLServer\Parameters' and value_name like 'SQLArg%' order by value_name desc) N
+WHERE  TF.value_data IS NULL
+union all 
+SELECT 'TraceFlag' , @@SERVERNAME,Script
+FROM   (SELECT 1117 TraceFlag,'DBCC TRACEON (1117, -1); ' Script
+UNION ALL SELECT 1118,'DBCC TRACEON (1118, -1); ' Script) M
+             LEFT JOIN #TraceFlag TF ON TF.TraceFlag = M.TraceFlag
+WHERE  TF.TraceFlag IS NULL
+
+DROP TABLE #TraceFlag
+--select * from #SR_reg
+
