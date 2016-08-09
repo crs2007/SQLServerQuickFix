@@ -1,4 +1,3 @@
-
 USE [master];
 GO
 /*
@@ -11,7 +10,7 @@ DECLARE @DB_Exclude TABLE
 (DatabaseName sysname)
 --CRM Dynamics
 INSERT @DB_Exclude
-SELECT d.name
+SELECT D.name
 FROM   sys.databases D
 WHERE  D.name IN ('MSCRM_CONFIG','OrganizationName_MSCRM');
 DECLARE @IsCRMDynamicsON BIT = 0
@@ -24,7 +23,7 @@ IF @IsCRMDynamicsON = 0
 
 --BizTalk
 INSERT @DB_Exclude
-SELECT d.name
+SELECT D.name
 FROM   sys.databases D
 WHERE  D.name IN ('BizTalkMsgBoxDB','BizTalkRuleEngineDb','SSODB','BizTalkHWSDb','BizTalkEDIDb','BAMArchive','BAMStarSchema','BAMPrimaryImport','BizTalkMgmtDb','BizTalkAnalysisDb','BizTalkTPMDb');
 
@@ -87,7 +86,6 @@ exec('DBCC TRACESTATUS(-1)')
                                 END; 
 
         SET @keyi = 'SYSTEM\CurrentControlSet\Services\' + @SQLServiceNamei;
-
              DELETE FROM @reg  
 --MSSQLSERVER Service Account
         INSERT  INTO @reg EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'ObjectName';
@@ -97,7 +95,6 @@ exec('DBCC TRACESTATUS(-1)')
                      ( Service, InstanceNames,keyname, value )
              SELECT 'SQL Server Engine',@InstanceNames,'Account Name'  ,value FROM @reg;
              
-
              
              -------------------------------------------------------------------------------
              IF @InstanceNames = @@SERVICENAME
@@ -113,20 +110,17 @@ exec('DBCC TRACESTATUS(-1)')
                     ELSE SELECT @ver = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1)
              END
                     
-
              SET @keyi = CASE WHEN @InstanceNames = 'MSSQLSERVER'
-                                    THEN 'SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL' + @Ver + '.' + @InstanceNames + '\MSSQLServer\CurrentVersion'
+                                    THEN 'SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL' + @ver + '.' + @InstanceNames + '\MSSQLServer\CurrentVersion'
                                     ELSE 'SOFTWARE\Wow6432Node\Microsoft\Microsoft SQL Server\' + @InstanceNames + '\MSSQLServer\CurrentVersion'
                                 END; 
              DELETE FROM @reg;
              DELETE FROM @Tempreg; 
-
         INSERT  INTO @Tempreg
              EXECUTE xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'CurrentVersion';
                     
              SELECT @ver = value
          FROM   @Tempreg;
-
              SET @ComptabilityLevel = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1) + SUBSTRING(SUBSTRING(@ver, CHARINDEX('.', @ver)+1,LEN(@ver) ), 1, 1);
              IF ( SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1) = '10' )
              BEGIN
@@ -136,10 +130,8 @@ exec('DBCC TRACESTATUS(-1)')
              END
    
              ELSE SELECT @ver = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1)
-
 ----------------------------------------------------------------------------------------------------------------------------------
-             SET @key = 'SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL' + @Ver + '.' + @InstanceNames + '\Setup'
-
+             SET @key = 'SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL' + @ver + '.' + @InstanceNames + '\Setup'
                     INSERT   @reg
              EXECUTE xp_regread 'HKEY_LOCAL_MACHINE', @key, 'PatchLevel';
                     
@@ -149,10 +141,9 @@ exec('DBCC TRACESTATUS(-1)')
              
 ----------------------------------------------------------------------------------------------------------------------------------
              DELETE FROM @reg;
-             SET @keyi = 'SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL' + @Ver + '.' + @InstanceNames + '\Setup'
+             SET @keyi = 'SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL' + @ver + '.' + @InstanceNames + '\Setup'
              INSERT  INTO @reg
              EXECUTE xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'Edition';
-
              INSERT #SR_reg ( Service,InstanceNames, keyname, value )
              SELECT 'SQL Server Engine Edition',@InstanceNames,'Edition Installed' ,value FROM @reg;
                     
@@ -160,37 +151,25 @@ exec('DBCC TRACESTATUS(-1)')
 ----------------------------------------------------------------------------------------------------------------------------------
              --Error Log file
              DELETE FROM @reg;
-        SET @keyi = N'Software\Microsoft\Microsoft SQL Server\MSSQL' + @Ver + '.' + @InstanceNames + '\MSSQLServer'
-
+        SET @keyi = N'Software\Microsoft\Microsoft SQL Server\MSSQL' + @ver + '.' + @InstanceNames + '\MSSQLServer'
              INSERT  INTO @reg
         EXECUTE xp_regread N'HKEY_LOCAL_MACHINE',@keyi, N'NumErrorLogs';
-
              INSERT #SR_reg ( Service,InstanceNames, keyname, value )
              SELECT 'SQL Server Number of Error Log files',@InstanceNames,'Number Error Logs' ,value FROM @reg;     
                      
                       
 ----------------------------------------------------------------------------------------------------------------------------------
-
-
-
              DELETE FROM @reg;
-
-
              SET @key = 'SOFTWARE\Microsoft\Microsoft SQL Server\' + @ComptabilityLevel;
-
         INSERT  INTO @reg
              EXECUTE xp_regread 'HKEY_LOCAL_MACHINE', @key, 'CustomerFeedback';
-
              INSERT #SR_reg ( Service,InstanceNames, keyname, value )
              SELECT 'SQL Server Customer Feedback',@InstanceNames,'Customer Feedback Enabled' ,value FROM @reg;
              DELETE FROM @reg;
-
         INSERT  INTO @reg
              EXECUTE xp_regread 'HKEY_LOCAL_MACHINE', @key, 'EnableErrorReporting';
-
              INSERT #SR_reg ( Service,InstanceNames, keyname, value )
              SELECT 'SQL Server Error Reporting',@InstanceNames,'Error Reporting Enabled' ,value FROM @reg;
-
                     
              
 ----------------------------------------------------------------------------------------------------------------------------------
@@ -199,7 +178,6 @@ exec('DBCC TRACESTATUS(-1)')
                                         THEN 'SQLSERVERAGENT'
                                         ELSE 'SQLAgent$' + @InstanceNames
                                 END; 
-
         SET @keyi = 'SYSTEM\CurrentControlSet\Services\' + @AgentServiceNamei; 
              
         DELETE FROM @reg  
@@ -228,14 +206,12 @@ exec('DBCC TRACESTATUS(-1)')
                            WHEN '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c' THEN 'High performance'
                            ELSE NULL END 
          FROM   @reg;
-
              
 -------------------------
-
         DELETE FROM @reg  
         
         SET @keyi = CASE WHEN @InstanceNames = 'MSSQLSERVER'
-                            THEN 'SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL' + @Ver + '.' + @InstanceNames + '\MSSQLServer\Parameters'
+                            THEN 'SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL' + @ver + '.' + @InstanceNames + '\MSSQLServer\Parameters'
                             ELSE 'SOFTWARE\Wow6432Node\Microsoft\Microsoft SQL Server\' + @InstanceNames + '\MSSQLServer\Parameters'
                         END; 
         DELETE FROM @reg  
@@ -258,7 +234,6 @@ exec('DBCC TRACESTATUS(-1)')
         INSERT #SR_reg
                 ( Service, InstanceNames,keyname, value )
         SELECT 'SQL Server Trace Flage',@InstanceNames,'Trace Flage' ,value FROM @reg;
-
   --END
   
 select 'PAGE VERIFY'[Type],db.name [Database Name],N'ALTER DATABASE [' + db.name + N'] SET PAGE_VERIFY CHECKSUM  WITH NO_WAIT;' [Script]
@@ -275,21 +250,17 @@ WHERE  is_percent_growth=1
 		AND db.state = 0
 		AND db.is_read_only = 0
 UNION ALL
-
 SELECT  'AUTO SHRINK'[Type],db.name,N'ALTER DATABASE ' + QUOTENAME(name) + ' SET AUTO_SHRINK OFF WITH NO_WAIT;' AS [To Execute]
 FROM    sys.databases db
 WHERE	db.state = 0
 		AND db.is_read_only = 0
 		AND is_auto_shrink_on = 1
-
 UNION ALL
-
 SELECT  'CURSOR_DEFAULT'[Type],db.name,N'ALTER DATABASE ' + QUOTENAME(name) + ' SET CURSOR_DEFAULT  LOCAL WITH NO_WAIT;' AS [To Execute]
 FROM    sys.databases db
 WHERE	db.state = 0
 and db.is_read_only = 0
 AND is_local_cursor_default = 0
-
 UNION ALL
 SELECT  'Auto Create Statistics'[Type],db.name,N'ALTER DATABASE ' + QUOTENAME(name) + ' SET AUTO_CREATE_STATISTICS ON WITH NO_WAIT;' AS [To Execute]
 FROM    sys.databases db
@@ -337,7 +308,6 @@ FROM	sys.configurations
 WHERE	name = 'optimize for ad hoc workloads'
 		and value = 0
 UNION ALL
-
 select 'Configuration'[Type],@@SERVERNAME,'exec sp_configure ''' +  name + ''',1;
 reconfigure'
 FROM	sys.configurations
@@ -378,7 +348,6 @@ union all
 select 'SQL Error Log' , @@SERVERNAME,'USE [master]
 GO
 EXEC xp_instance_regwrite N''HKEY_LOCAL_MACHINE'', N''Software\\Microsoft\\MSSQLServer\\MSSQLServer'', N''NumErrorLogs'', REG_DWORD, 30' WHERE exists (select top 1 1 from #SR_reg WHERE keyname = 'Number Error Logs' and CurrentInstance = 1 and value < 30)
-
 union all 
 select 'SQL Error Log' , @@SERVERNAME, 'BEGIN TRANSACTION
 DECLARE @ReturnCode INT
@@ -440,7 +409,7 @@ COMMIT TRANSACTION
 GOTO EndSave
 QuitWithRollback:
     IF (@@TRANCOUNT > 0) ROLLBACK TRANSACTION
-EndSave:' WHERE NOT EXISTS (SELECT TOP 1 1 FROM MSDB.[dbo].[sysjobs] WHERE name = '_Admin_ :: CycleErrorLog') AND exists (select top 1 1 from #SR_reg WHERE keyname = 'Number Error Logs' and CurrentInstance = 1 and value < 30)
+EndSave:' WHERE NOT EXISTS (SELECT TOP 1 1 FROM msdb.[dbo].[sysjobs] WHERE name = '_Admin_ :: CycleErrorLog') AND exists (select top 1 1 from #SR_reg WHERE keyname = 'Number Error Logs' and CurrentInstance = 1 and value < 30)
 UNION ALL
 select 'Windows Power Plan' , @@SERVERNAME,'USE [master]
 GO
@@ -487,15 +456,15 @@ WHERE  Num.n <= (select case when cpu_count > 8 then 8 else cpu_count end from s
 union all 
 SELECT 'TraceFlag' , @@SERVERNAME,'USE [master]
 GO
-EXEC xp_instance_regwrite N''HKEY_LOCAL_MACHINE'', N''SOFTWARE\\Microsoft\Microsoft SQL Server\\MSSQL' + @Ver + '.' + @InstanceNames + '\\MSSQLServer\\Parameters'', N''SQLArg' +CONVERT(VARCHAR(10),N.Num + ROW_NUMBER() OVER (ORDER BY N.Num)) + ''', REG_SZ, ''' + M.TraceFlag + '''' Script
+EXEC xp_instance_regwrite N''HKEY_LOCAL_MACHINE'', N''SOFTWARE\\Microsoft\Microsoft SQL Server\\MSSQL' + @ver + '.' + @InstanceNames + '\\MSSQLServer\\Parameters'', N''SQLArg' +CONVERT(VARCHAR(10),N.Num + ROW_NUMBER() OVER (ORDER BY N.Num)) + ''', REG_SZ, ''' + M.TraceFlag + '''' Script
 FROM   (SELECT '-t1117' TraceFlag
 UNION ALL SELECT '-t1118') M
              LEFT JOIN (
                                  select *
-                             FROM sys.dm_server_registry WHERE registry_key = 'HKLM\Software\Microsoft\Microsoft SQL Server\MSSQL' + @Ver + '.' + @InstanceNames + '\MSSQLServer\Parameters' and value_name like 'SQLArg%'
+                             FROM sys.dm_server_registry WHERE registry_key = 'HKLM\Software\Microsoft\Microsoft SQL Server\MSSQL' + @ver + '.' + @InstanceNames + '\MSSQLServer\Parameters' and value_name like 'SQLArg%'
                                  and value_name not in ('SQLArg0','SQLArg1','SQLArg2')
                                  and convert(varchar(20),value_data) like '-t%') TF ON CONVERT(VARCHAR(50),TF.value_data) = M.TraceFlag
-CROSS JOIN (select top 1 value_name,replace(value_name,'SQLArg','') Num from sys.dm_server_registry WHERE registry_key = 'HKLM\Software\Microsoft\Microsoft SQL Server\MSSQL' + @Ver + '.' + @InstanceNames + '\MSSQLServer\Parameters' and value_name like 'SQLArg%' order by value_name desc) N
+CROSS JOIN (select top 1 value_name,replace(value_name,'SQLArg','') Num from sys.dm_server_registry WHERE registry_key = 'HKLM\Software\Microsoft\Microsoft SQL Server\MSSQL' + @ver + '.' + @InstanceNames + '\MSSQLServer\Parameters' and value_name like 'SQLArg%' order by value_name desc) N
 WHERE  TF.value_data IS NULL
 union all 
 SELECT 'TraceFlag' , @@SERVERNAME,Script
@@ -503,7 +472,5 @@ FROM   (SELECT 1117 TraceFlag,'DBCC TRACEON (1117, -1); ' Script
 UNION ALL SELECT 1118,'DBCC TRACEON (1118, -1); ' Script) M
              LEFT JOIN #TraceFlag TF ON TF.TraceFlag = M.TraceFlag
 WHERE  TF.TraceFlag IS NULL
-
 DROP TABLE #TraceFlag
 --select * from #SR_reg
-
