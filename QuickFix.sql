@@ -13,7 +13,8 @@ INSERT @DB_Exclude
 SELECT D.name
 FROM   sys.databases D
 WHERE  D.name IN ('MSCRM_CONFIG','OrganizationName_MSCRM');
-DECLARE @IsCRMDynamicsON BIT = 0
+DECLARE @IsCRMDynamicsON BIT;
+SET @IsCRMDynamicsON = 0
 SELECT TOP 1 @IsCRMDynamicsON = 1 
 FROM   sys.server_principals SP
 WHERE  SP.name = 'MSCRMSqlLogin'
@@ -39,6 +40,23 @@ WHERE  DP.type = ''R''
               AND DP.name IN (''SPDataAccess'',''SPReadOnly'')'
 
              
+DECLARE @cmd NVARCHAR(MAX);
+
+CREATE TABLE #dm_server_registry([Type] VARCHAR(250),[Database Name] sysname,Script NVARCHAR(MAX))
+SET @cmd = 'INSERT #dm_server_registry
+SELECT	''TraceFlag'' , @@SERVERNAME,''USE [master]
+GO
+EXEC xp_instance_regwrite N''''HKEY_LOCAL_MACHINE'''', N''''SOFTWARE\\Microsoft\Microsoft SQL Server\\MSSQL'' + @Ver + ''.'' + @InstanceNames + ''\\MSSQLServer\\Parameters'''', N''''SQLArg'' +CONVERT(VARCHAR(10),N.Num + ROW_NUMBER() OVER (ORDER BY N.Num)) + '''''', REG_SZ, '''''' + M.TraceFlag + '''''''' Script
+FROM	(SELECT ''-t1117'' TraceFlag
+UNION ALL SELECT ''-t1118'') M
+		LEFT JOIN (
+					select *
+					from sys.dm_server_registry where registry_key = ''HKLM\Software\Microsoft\Microsoft SQL Server\MSSQL'' + @Ver + ''.'' + @InstanceNames + ''\MSSQLServer\Parameters'' and value_name like ''SQLArg%''
+					and value_name not in (''SQLArg0'',''SQLArg1'',''SQLArg2'')
+					and convert(varchar(20),value_data) like ''-t%'') TF ON CONVERT(VARCHAR(50),TF.value_data) = M.TraceFlag
+CROSS JOIN (select top 1 value_name,replace(value_name,''SQLArg'','''') Num from sys.dm_server_registry where registry_key = ''HKLM\Software\Microsoft\Microsoft SQL Server\MSSQL'' + @Ver + ''.'' + @InstanceNames + ''\MSSQLServer\Parameters'' and value_name like ''SQLArg%'' order by value_name desc) N
+WHERE	TF.value_data IS NULL;'
+
 
 IF OBJECT_ID('tempdb..#TraceFlag') IS NOT NULL DROP TABLE #TraceFlag
 CREATE TABLE #TraceFlag(TraceFlag INT,Status INT,Global INT,Session INT)
@@ -52,7 +70,8 @@ exec('DBCC TRACESTATUS(-1)')
 
 
   /* declare variables */
-       DECLARE @InstanceNames nvarchar(100) = @@servicename
+       DECLARE @InstanceNames nvarchar(100);
+	   SET @InstanceNames = @@servicename
        DECLARE @reg TABLE
              (
                     keyname CHAR(200) ,
@@ -107,7 +126,11 @@ exec('DBCC TRACESTATUS(-1)')
                            ELSE SELECT @ver = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1)
                     END
    
-                    ELSE SELECT @ver = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1)
+                    ELSE SELECT @ver = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1);
+				IF @ver > '9'
+				BEGIN
+					EXEC sp_executesql @cmd
+				END
              END
                     
              SET @keyi = CASE WHEN @InstanceNames = 'MSSQLSERVER'
@@ -121,15 +144,21 @@ exec('DBCC TRACESTATUS(-1)')
                     
              SELECT @ver = value
          FROM   @Tempreg;
-             SET @ComptabilityLevel = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1) + SUBSTRING(SUBSTRING(@ver, CHARINDEX('.', @ver)+1,LEN(@ver) ), 1, 1);
-             IF ( SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1) = '10' )
-             BEGIN
-                    IF SUBSTRING(SUBSTRING(@ver, CHARINDEX('.', @ver)+1 , LEN(@ver)),1,CHARINDEX('.', SUBSTRING(@ver, CHARINDEX('.', @ver)+1 , LEN(@ver)))-1) = '50'
-                           SELECT @ver = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1) + '_' + SUBSTRING(SUBSTRING(@ver, CHARINDEX('.', @ver)+1 , LEN(@ver)),1,CHARINDEX('.', SUBSTRING(@ver, CHARINDEX('.', @ver)+1 , LEN(@ver)))-1);
-                    ELSE SELECT @ver = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1)
-             END
+             IF LEN(@ver) > 1
+			 BEGIN
+				SET @ComptabilityLevel = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1) + SUBSTRING(SUBSTRING(@ver, CHARINDEX('.', @ver)+1,LEN(@ver) ), 1, 1);
+			
+				 IF ( SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1) = '10' )
+				 BEGIN
+						IF SUBSTRING(SUBSTRING(@ver, CHARINDEX('.', @ver)+1 , LEN(@ver)),1,CHARINDEX('.', SUBSTRING(@ver, CHARINDEX('.', @ver)+1 , LEN(@ver)))-1) = '50'
+							   SELECT @ver = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1) + '_' + SUBSTRING(SUBSTRING(@ver, CHARINDEX('.', @ver)+1 , LEN(@ver)),1,CHARINDEX('.', SUBSTRING(@ver, CHARINDEX('.', @ver)+1 , LEN(@ver)))-1);
+						ELSE SELECT @ver = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1)
+				 END
    
-             ELSE SELECT @ver = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1)
+				 ELSE SELECT @ver = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1)
+			 END
+			 ELSE
+				SET @ComptabilityLevel = @ver + '0'
 ----------------------------------------------------------------------------------------------------------------------------------
              SET @key = 'SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL' + @ver + '.' + @InstanceNames + '\Setup'
                     INSERT   @reg
@@ -453,19 +482,8 @@ and database_id = 2
 outer apply(select top 1 'ALTER DATABASE [tempdb] MODIFY FILE ( NAME = N''' + mf.name + ''', SIZE = '+ maxS.size + ');' Script WHERE maxS.OriginalSize!=mf.size)MakeSameSize
 WHERE  Num.n <= (select case when cpu_count > 8 then 8 else cpu_count end from sys.dm_os_sys_info)
              and (mf.database_id is null or MakeSameSize.Script is not null)
-union all 
-SELECT 'TraceFlag' , @@SERVERNAME,'USE [master]
-GO
-EXEC xp_instance_regwrite N''HKEY_LOCAL_MACHINE'', N''SOFTWARE\\Microsoft\Microsoft SQL Server\\MSSQL' + @ver + '.' + @InstanceNames + '\\MSSQLServer\\Parameters'', N''SQLArg' +CONVERT(VARCHAR(10),N.Num + ROW_NUMBER() OVER (ORDER BY N.Num)) + ''', REG_SZ, ''' + M.TraceFlag + '''' Script
-FROM   (SELECT '-t1117' TraceFlag
-UNION ALL SELECT '-t1118') M
-             LEFT JOIN (
-                                 select *
-                             FROM sys.dm_server_registry WHERE registry_key = 'HKLM\Software\Microsoft\Microsoft SQL Server\MSSQL' + @ver + '.' + @InstanceNames + '\MSSQLServer\Parameters' and value_name like 'SQLArg%'
-                                 and value_name not in ('SQLArg0','SQLArg1','SQLArg2')
-                                 and convert(varchar(20),value_data) like '-t%') TF ON CONVERT(VARCHAR(50),TF.value_data) = M.TraceFlag
-CROSS JOIN (select top 1 value_name,replace(value_name,'SQLArg','') Num from sys.dm_server_registry WHERE registry_key = 'HKLM\Software\Microsoft\Microsoft SQL Server\MSSQL' + @ver + '.' + @InstanceNames + '\MSSQLServer\Parameters' and value_name like 'SQLArg%' order by value_name desc) N
-WHERE  TF.value_data IS NULL
+UNION ALL
+SELECT * FROM #dm_server_registry
 union all 
 SELECT 'TraceFlag' , @@SERVERNAME,Script
 FROM   (SELECT 1117 TraceFlag,'DBCC TRACEON (1117, -1); ' Script
