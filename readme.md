@@ -10,8 +10,10 @@ Make sure you have system administrator privilege on the SQL server instance.
 1. [SQL best practices for Biztalk](https://blogs.msdn.microsoft.com/blogdoezequiel/2009/01/25/sql-best-practices-for-biztalk)
 2. [Best practices for SQL Server in a SharePoint Server farm](https://technet.microsoft.com/en-us/library/hh292622.aspx)  
 
+
 ### Disclaimer
-This code and information are provided "AS IS" without warranty of any kind, either expressed or implied, including but not limited to the implied warranties or merchantability and/or fitness for a particular purpose.
+This code and information are provided "AS IS" without warranty of any kind, either expressed or implied, including but not limited to the implied warranties or merchantability and/or fitness for a particular purpose.  
+
 ### License
 This script is free to download and use for personal, educational, and internal corporate purposes, provided that this header is preserved. 
 Redistribution or sale of this script, in whole or in part, is prohibited without the author's express written consent.
