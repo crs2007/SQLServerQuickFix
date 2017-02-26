@@ -3,8 +3,8 @@ This is a T-SQL script by Rimer Sharon.
 Fix default behaviour of SQL Server
 
 ### Support
-[x] SQL Server 2005 and Up
-[x] Case sensitive
+- [x] SQL Server 2005 and Up
+- [x] Case sensitive
 
 ### Installation
 Just run script as-is on your SQL Server.
