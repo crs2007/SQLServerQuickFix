@@ -20,41 +20,14 @@ Auto create statistics must be disabled
 Auto update statistics must be disabled
 MAXDOP (Max degree of parallelism) must be defined as 1 in both SQL Server 2000 and SQL Server 2005 in the instance in which BizTalkMsgBoxDB database exists
 */
+---------------------------------------------------------------------
+--					D e c l a r a t  i o n 
+---------------------------------------------------------------------
 DECLARE @DB_Exclude TABLE ( DatabaseName sysname );
---CRM Dynamics
-INSERT  @DB_Exclude
-        SELECT  D.name
-        FROM    sys.databases D
-        WHERE   D.name IN ( 'MSCRM_CONFIG', 'OrganizationName_MSCRM' );
+IF OBJECT_ID('tempdb..#ExcludeDB') IS NOT NULL DROP TABLE #ExcludeDB;
+CREATE TABLE #ExcludeDB(name sysname NOT NULL);
 DECLARE @IsCRMDynamicsON BIT;
-SET @IsCRMDynamicsON = 0;
-SELECT TOP 1
-        @IsCRMDynamicsON = 1
-FROM    sys.server_principals SP
-WHERE   SP.name = 'MSCRMSqlLogin';
-IF @IsCRMDynamicsON = 0
-    SELECT TOP 1
-            @IsCRMDynamicsON = 1
-    FROM    @DB_Exclude;
-
---BizTalk
-INSERT  @DB_Exclude
-        SELECT  D.name
-        FROM    sys.databases D
-        WHERE   D.name IN ( 'BizTalkMsgBoxDB', 'BizTalkRuleEngineDb', 'SSODB',
-                            'BizTalkHWSDb', 'BizTalkEDIDb', 'BAMArchive',
-                            'BAMStarSchema', 'BAMPrimaryImport',
-                            'BizTalkMgmtDb', 'BizTalkAnalysisDb',
-                            'BizTalkTPMDb' );
-
---SharePoint
-INSERT  @DB_Exclude
-        EXEC sp_MSforeachdb '
-use [?]
-SELECT TOP 1 DB_NAME()[DatabaseName]
-FROM   sys.database_principals DP
-WHERE  DP.type = ''R'' AND DP.name IN (''SPDataAccess'',''SPReadOnly'')';
-
+DECLARE @cmd NVARCHAR(MAX);
 DECLARE @SharePointAG TABLE
     (
       [Type] sysname ,
@@ -73,44 +46,7 @@ CREATE TABLE #checkversion
       build AS PARSENAME(CONVERT(VARCHAR(32), version), 2) ,
       revision AS PARSENAME(CONVERT(VARCHAR(32), version), 1)
     );
-INSERT  INTO #checkversion
-        ( version
-        )
-        SELECT  CAST(SERVERPROPERTY('ProductVersion') AS NVARCHAR(128));
-SELECT  @MajorVersion = major + CASE WHEN minor = 0 THEN '00'
-                                     ELSE minor
-                                END
-FROM    #checkversion;
-IF @MajorVersion > 1050
-    AND SERVERPROPERTY('IsHadrEnabled') = 1--2012
-    BEGIN
-        INSERT  @SharePointAG
-                EXEC
-                    ( '
-SELECT  ''SharePoint database''[Type],D.name [dbName],CONCAT(''/*Availability group - '',ag.name,'' conteins '',D.name,'' on asynchronous mode. SharePoint does not support this mode on this DB type.
-https://technet.microsoft.com/en-us/library/jj841106.aspx
-*/
-ALTER AVAILABILITY GROUP '',ag.name,'' MODIFY REPLICA ON '',@@SERVERNAME,'' WITH (AVAILABILITY_MODE = SYNCHRONOUS_COMMIT);  '')[Message]
-FROM    sys.availability_groups AS ag
-        INNER JOIN sys.availability_replicas AS ar ON ag.group_id = ar.group_id
-        INNER JOIN sys.dm_hadr_availability_replica_states AS ar_state ON ar.replica_id = ar_state.replica_id
-        INNER JOIN sys.dm_hadr_database_replica_states dr_state ON ag.group_id = dr_state.group_id AND dr_state.replica_id = ar_state.replica_id
-              INNER JOIN sys.databases D ON D.database_id = dr_state.database_id
-WHERE  (D.name LIKE ''Search[_]Service[_]Application[_]DB[_]%''
-              OR D.name LIKE ''SharePoint[_]Admin[_]Content%''
-              OR D.name LIKE ''SharePoint[_]Config%''
-              OR D.name LIKE ''Search[_]Service[_]Application[_]AnalyticsReportingStoreDB[_]%''
-              OR D.name LIKE ''Search[_]Service[_]Application[_]CrawlStoreDB[_]%''
-              OR D.name LIKE ''Search[_]Service[_]Application[_]LinkStoreDB[_]%''
-              OR D.name LIKE ''SharePoint[_]Logging%''
-              OR D.name LIKE ''Application[_]SyncDB[_]%''
-              OR D.name LIKE ''SessionStateService[_]%''
-              
-              )
-              AND ar.availability_mode = 0;'
-                    );
-    END;
-DECLARE @cmd NVARCHAR(MAX);
+
 IF OBJECT_ID('tempdb..#dm_server_registry') IS NOT NULL
     DROP TABLE #dm_server_registry;
 CREATE TABLE #dm_server_registry
@@ -119,21 +55,6 @@ CREATE TABLE #dm_server_registry
       [Database Name] sysname ,
       Script NVARCHAR(MAX)
     );
-SET @cmd = 'INSERT #dm_server_registry
-SELECT	''TraceFlag'' , @@SERVERNAME,''USE [master]
-GO
-EXEC xp_instance_regwrite N''''HKEY_LOCAL_MACHINE'''', N''''SOFTWARE\\Microsoft\Microsoft SQL Server\\MSSQL'' + @Ver + ''.'' + @InstanceNames + ''\\MSSQLServer\\Parameters'''', N''''SQLArg'' +CONVERT(VARCHAR(10),N.Num + ROW_NUMBER() OVER (ORDER BY N.Num)) + '''''', REG_SZ, '''''' + M.TraceFlag + '''''''' Script
-FROM	(SELECT ''-t1117'' TraceFlag
-UNION ALL SELECT ''-t1118'') M
-		LEFT JOIN (
-					select *
-					from sys.dm_server_registry where registry_key = ''HKLM\Software\Microsoft\Microsoft SQL Server\MSSQL'' + @Ver + ''.'' + @InstanceNames + ''\MSSQLServer\Parameters'' and value_name like ''SQLArg%''
-					and value_name not in (''SQLArg0'',''SQLArg1'',''SQLArg2'')
-					and convert(varchar(20),value_data) like ''-t%'') TF ON CONVERT(VARCHAR(50),TF.value_data) = M.TraceFlag
-CROSS JOIN (select top 1 value_name,replace(value_name,''SQLArg'','''') Num from sys.dm_server_registry where registry_key = ''HKLM\Software\Microsoft\Microsoft SQL Server\MSSQL'' + @Ver + ''.'' + @InstanceNames + ''\MSSQLServer\Parameters'' and value_name like ''SQLArg%'' order by value_name desc) N
-WHERE	TF.value_data IS NULL;';
-
-
 IF OBJECT_ID('tempdb..#TraceFlag') IS NOT NULL
     DROP TABLE #TraceFlag;
 CREATE TABLE #TraceFlag
@@ -143,19 +64,10 @@ CREATE TABLE #TraceFlag
       [Global] INT ,
       [Session] INT
     );
-INSERT  #TraceFlag
-        EXEC ( 'DBCC TRACESTATUS(-1)'
-            );
-  
 DECLARE @ver NVARCHAR(128);
 DECLARE @key VARCHAR(8000);
 DECLARE @ComptabilityLevel NVARCHAR(128);
-
-
-
-  /* declare variables */
 DECLARE @InstanceNames NVARCHAR(100);
-SET @InstanceNames = @@servicename;
 DECLARE @reg TABLE
     (
       keyname CHAR(200) ,
@@ -185,7 +97,102 @@ DECLARE @keyi VARCHAR(8000);
 DECLARE @SQLServiceNamei VARCHAR(8000);
 DECLARE @AgentServiceNamei VARCHAR(8000);
 
-  
+---------------------------------------------------------------------
+--							CRM Dynamics
+---------------------------------------------------------------------
+INSERT  @DB_Exclude
+        SELECT  D.name
+        FROM    sys.databases D
+        WHERE   D.name IN ( 'MSCRM_CONFIG', 'OrganizationName_MSCRM' );
+
+SET @IsCRMDynamicsON = 0;
+SELECT TOP 1
+        @IsCRMDynamicsON = 1
+FROM    sys.server_principals SP
+WHERE   SP.name = 'MSCRMSqlLogin';
+IF @IsCRMDynamicsON = 0
+    SELECT TOP 1
+            @IsCRMDynamicsON = 1
+    FROM    @DB_Exclude;
+---------------------------------------------------------------------
+--							BizTalk
+---------------------------------------------------------------------
+INSERT  @DB_Exclude
+        SELECT  D.name
+        FROM    sys.databases D
+        WHERE   D.name IN ( 'BizTalkMsgBoxDB', 'BizTalkRuleEngineDb', 'SSODB',
+                            'BizTalkHWSDb', 'BizTalkEDIDb', 'BAMArchive',
+                            'BAMStarSchema', 'BAMPrimaryImport',
+                            'BizTalkMgmtDb', 'BizTalkAnalysisDb',
+                            'BizTalkTPMDb' );
+---------------------------------------------------------------------
+--							SharePoint
+---------------------------------------------------------------------
+INSERT  @DB_Exclude
+        EXEC sp_MSforeachdb 'SELECT TOP 1 ''[?]''[DatabaseName]
+FROM   [?].sys.database_principals DP
+WHERE  DP.type = ''R'' AND DP.name IN (''SPDataAccess'',''SPReadOnly'')';
+
+INSERT  INTO #checkversion
+        ( version
+        )
+        SELECT  CAST(SERVERPROPERTY('ProductVersion') AS NVARCHAR(128));
+SELECT  @MajorVersion = major + CASE WHEN minor = 0 THEN '00'
+                                     ELSE minor
+                                END
+FROM    #checkversion;
+
+IF @MajorVersion > 1050 AND SERVERPROPERTY('IsHadrEnabled') = 1--2012
+BEGIN
+    INSERT  @SharePointAG EXEC ( '
+SELECT  ''SharePoint database''[Type],D.name [dbName],CONCAT(''/*Availability group - '',ag.name,'' conteins '',D.name,'' on asynchronous mode. SharePoint does not support this mode on this DB type.
+https://technet.microsoft.com/en-us/library/jj841106.aspx
+*/
+ALTER AVAILABILITY GROUP '',ag.name,'' MODIFY REPLICA ON '',@@SERVERNAME,'' WITH (AVAILABILITY_MODE = SYNCHRONOUS_COMMIT);  '')[Message]
+FROM    sys.availability_groups AS ag
+        INNER JOIN sys.availability_replicas AS ar ON ag.group_id = ar.group_id
+        INNER JOIN sys.dm_hadr_availability_replica_states AS ar_state ON ar.replica_id = ar_state.replica_id
+        INNER JOIN sys.dm_hadr_database_replica_states dr_state ON ag.group_id = dr_state.group_id AND dr_state.replica_id = ar_state.replica_id
+              INNER JOIN sys.databases D ON D.database_id = dr_state.database_id
+WHERE  (D.name LIKE ''Search[_]Service[_]Application[_]DB[_]%''
+              OR D.name LIKE ''SharePoint[_]Admin[_]Content%''
+              OR D.name LIKE ''SharePoint[_]Config%''
+              OR D.name LIKE ''Search[_]Service[_]Application[_]AnalyticsReportingStoreDB[_]%''
+              OR D.name LIKE ''Search[_]Service[_]Application[_]CrawlStoreDB[_]%''
+              OR D.name LIKE ''Search[_]Service[_]Application[_]LinkStoreDB[_]%''
+              OR D.name LIKE ''SharePoint[_]Logging%''
+              OR D.name LIKE ''Application[_]SyncDB[_]%''
+              OR D.name LIKE ''SessionStateService[_]%''
+              
+              )
+              AND ar.availability_mode = 0;'
+                    );
+	EXEC('INSERT	#ExcludeDB
+SELECT	d.name
+FROM	sys.databases d
+		INNER JOIN sys.dm_hadr_availability_replica_states rs ON d.replica_id = rs.replica_id
+WHERE	rs.role != 1;');
+
+END;
+
+SET @cmd = 'INSERT #dm_server_registry
+SELECT	''TraceFlag'' , @@SERVERNAME,''USE [master]
+GO
+EXEC xp_instance_regwrite N''''HKEY_LOCAL_MACHINE'''', N''''SOFTWARE\\Microsoft\Microsoft SQL Server\\MSSQL'' + @Ver + ''.'' + @InstanceNames + ''\\MSSQLServer\\Parameters'''', N''''SQLArg'' +CONVERT(VARCHAR(10),N.Num + ROW_NUMBER() OVER (ORDER BY N.Num)) + '''''', REG_SZ, '''''' + M.TraceFlag + '''''''' Script
+FROM	(SELECT ''-t1117'' TraceFlag
+UNION ALL SELECT ''-t1118'') M
+		LEFT JOIN (
+					select *
+					from sys.dm_server_registry where registry_key = ''HKLM\Software\Microsoft\Microsoft SQL Server\MSSQL'' + @Ver + ''.'' + @InstanceNames + ''\MSSQLServer\Parameters'' and value_name like ''SQLArg%''
+					and value_name not in (''SQLArg0'',''SQLArg1'',''SQLArg2'')
+					and convert(varchar(20),value_data) like ''-t%'') TF ON CONVERT(VARCHAR(50),TF.value_data) = M.TraceFlag
+CROSS JOIN (select top 1 value_name,replace(value_name,''SQLArg'','''') Num from sys.dm_server_registry where registry_key = ''HKLM\Software\Microsoft\Microsoft SQL Server\MSSQL'' + @Ver + ''.'' + @InstanceNames + ''\MSSQLServer\Parameters'' and value_name like ''SQLArg%'' order by value_name desc) N
+WHERE	TF.value_data IS NULL;';
+
+
+INSERT  #TraceFlag EXEC ('DBCC TRACESTATUS(-1)'); 
+
+SET @InstanceNames = @@servicename;
   --BEGIN
 --Build Sql Server's full service name
 SET @SQLServiceNamei = CASE WHEN @InstanceNames = 'MSSQLSERVER'
@@ -481,12 +488,13 @@ INSERT  #SR_reg
 SELECT  'PAGE VERIFY' [Type] ,
         db.name [Database Name] ,
         N'ALTER DATABASE [' + db.name
-        + N'] SET PAGE_VERIFY CHECKSUM  WITH NO_WAIT;' [Script]
+        + N'] SET PAGE_VERIFY CHECKSUM WITH NO_WAIT;' [Script]
 FROM    sys.databases db
 WHERE   db.state = 0
         AND db.is_read_only = 0
         AND db.page_verify_option != 2
         AND db.database_id > 4
+		AND NOT EXISTS (SELECT TOP 1 1 FROM #ExcludeDB X WHERE X.name = db.name)
 UNION ALL
 SELECT  'File Growth' [Type] ,
         db.name AS database_name ,
@@ -500,6 +508,7 @@ FROM    sys.master_files mf ( NOLOCK )
 WHERE   is_percent_growth = 1
         AND db.state = 0
         AND db.is_read_only = 0
+		AND NOT EXISTS (SELECT TOP 1 1 FROM #ExcludeDB X WHERE X.name = db.name)
 UNION ALL
 SELECT  'AUTO SHRINK' [Type] ,
         db.name ,
@@ -509,6 +518,7 @@ FROM    sys.databases db
 WHERE   db.state = 0
         AND db.is_read_only = 0
         AND is_auto_shrink_on = 1
+		AND NOT EXISTS (SELECT TOP 1 1 FROM #ExcludeDB X WHERE X.name = db.name)
 UNION ALL
 SELECT  'CURSOR_DEFAULT' [Type] ,
         db.name ,
@@ -518,6 +528,7 @@ FROM    sys.databases db
 WHERE   db.state = 0
         AND db.is_read_only = 0
         AND is_local_cursor_default = 0
+		AND NOT EXISTS (SELECT TOP 1 1 FROM #ExcludeDB X WHERE X.name = db.name)
 UNION ALL
 SELECT  'Auto Create Statistics' [Type] ,
         db.name ,
@@ -527,6 +538,7 @@ FROM    sys.databases db
 WHERE   db.state = 0
         AND db.is_read_only = 0
         AND is_auto_create_stats_on = 0
+		AND NOT EXISTS (SELECT TOP 1 1 FROM #ExcludeDB X WHERE X.name = db.name)
         AND db.name NOT IN ( SELECT DatabaseName
                              FROM   @DB_Exclude )
 UNION ALL
@@ -538,6 +550,7 @@ FROM    sys.databases db
 WHERE   db.state = 0
         AND db.is_read_only = 0
         AND is_auto_create_stats_on = 1
+		AND NOT EXISTS (SELECT TOP 1 1 FROM #ExcludeDB X WHERE X.name = db.name)
         AND db.name IN ( SELECT DatabaseName
                          FROM   @DB_Exclude )
 UNION ALL
@@ -549,6 +562,7 @@ FROM    sys.databases db
 WHERE   db.state = 0
         AND db.is_read_only = 0
         AND is_auto_update_stats_on = 0
+		AND NOT EXISTS (SELECT TOP 1 1 FROM #ExcludeDB X WHERE X.name = db.name)
         AND db.name NOT IN ( SELECT DatabaseName
                              FROM   @DB_Exclude )
 UNION ALL
@@ -560,6 +574,7 @@ FROM    sys.databases db
 WHERE   db.state = 0
         AND db.is_read_only = 0
         AND is_auto_update_stats_on = 1
+		AND NOT EXISTS (SELECT TOP 1 1 FROM #ExcludeDB X WHERE X.name = db.name)
         AND db.name IN ( SELECT DatabaseName
                          FROM   @DB_Exclude )
 UNION ALL
