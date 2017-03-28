@@ -14,6 +14,10 @@ LICENSE:
 */
 USE [master];
 GO
+-- install configuration recommendations by John Eisbrener
+--https://dbaeyes.wordpress.com/2011/08/18/hooray-you-finished-installing-sql-server-now-what/
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+SET NOCOUNT ON;
 /*
 Biztalk:https://blogs.msdn.microsoft.com/blogdoezequiel/2009/01/25/sql-best-practices-for-biztalk/
 Auto create statistics must be disabled
@@ -483,7 +487,6 @@ INSERT  #SR_reg
                 'Trace Flage' ,
                 value
         FROM    @reg;
-  --END
   
 SELECT  'PAGE VERIFY' [Type] ,
         db.name [Database Name] ,
@@ -503,9 +506,9 @@ SELECT  'File Growth' [Type] ,
                                   WHEN 'LOG' THEN '128MB'
                                   ELSE '256MB'
                                 END + ');'
-FROM    sys.master_files mf ( NOLOCK )
-        INNER JOIN sys.databases db ( NOLOCK ) ON mf.database_id = db.database_id
-WHERE   is_percent_growth = 1
+FROM    sys.master_files mf 
+        INNER JOIN sys.databases db ON mf.database_id = db.database_id
+WHERE   (is_percent_growth = 1 OR (is_percent_growth = 0 AND mf.growth = 128))
         AND db.state = 0
         AND db.is_read_only = 0
 		AND NOT EXISTS (SELECT TOP 1 1 FROM #ExcludeDB X WHERE X.name = db.name)
@@ -513,7 +516,7 @@ UNION ALL
 SELECT  'AUTO SHRINK' [Type] ,
         db.name ,
         N'ALTER DATABASE ' + QUOTENAME(name)
-        + ' SET AUTO_SHRINK OFF WITH NO_WAIT;' AS [To Execute]
+        + ' SET AUTO_SHRINK OFF WITH NO_WAIT;' AS [ToExecute]
 FROM    sys.databases db
 WHERE   db.state = 0
         AND db.is_read_only = 0
@@ -523,7 +526,7 @@ UNION ALL
 SELECT  'CURSOR_DEFAULT' [Type] ,
         db.name ,
         N'ALTER DATABASE ' + QUOTENAME(name)
-        + ' SET CURSOR_DEFAULT  LOCAL WITH NO_WAIT;' AS [To Execute]
+        + ' SET CURSOR_DEFAULT  LOCAL WITH NO_WAIT;' AS [ToExecute]
 FROM    sys.databases db
 WHERE   db.state = 0
         AND db.is_read_only = 0
@@ -533,7 +536,7 @@ UNION ALL
 SELECT  'Auto Create Statistics' [Type] ,
         db.name ,
         N'ALTER DATABASE ' + QUOTENAME(name)
-        + ' SET AUTO_CREATE_STATISTICS ON WITH NO_WAIT;' AS [To Execute]
+        + ' SET AUTO_CREATE_STATISTICS ON WITH NO_WAIT;' AS [ToExecute]
 FROM    sys.databases db
 WHERE   db.state = 0
         AND db.is_read_only = 0
@@ -545,7 +548,7 @@ UNION ALL
 SELECT  'Auto Create Statistics' [Type] ,
         db.name ,
         N'ALTER DATABASE ' + QUOTENAME(name)
-        + ' SET AUTO_CREATE_STATISTICS OFF WITH NO_WAIT;' AS [To Execute]
+        + ' SET AUTO_CREATE_STATISTICS OFF WITH NO_WAIT;' AS [ToExecute]
 FROM    sys.databases db
 WHERE   db.state = 0
         AND db.is_read_only = 0
@@ -557,7 +560,7 @@ UNION ALL
 SELECT  'Auto Updtae Statistics' [Type] ,
         db.name ,
         N'ALTER DATABASE ' + QUOTENAME(name)
-        + ' SET AUTO_UPDATE_STATISTICS ON WITH NO_WAIT;' AS [To Execute]
+        + ' SET AUTO_UPDATE_STATISTICS ON WITH NO_WAIT;' AS [ToExecute]
 FROM    sys.databases db
 WHERE   db.state = 0
         AND db.is_read_only = 0
@@ -569,7 +572,7 @@ UNION ALL
 SELECT  'Auto Updtae Statistics' [Type] ,
         db.name ,
         N'ALTER DATABASE ' + QUOTENAME(name)
-        + ' SET AUTO_UPDATE_STATISTICS OFF WITH NO_WAIT;' AS [To Execute]
+        + ' SET AUTO_UPDATE_STATISTICS OFF WITH NO_WAIT;' AS [ToExecute]
 FROM    sys.databases db
 WHERE   db.state = 0
         AND db.is_read_only = 0
@@ -754,8 +757,8 @@ WHERE   EXISTS ( SELECT TOP 1
                         AND keyname = 'Power Plan'
                         AND value != 'High performance' )
 UNION ALL
-SELECT  'tempdb' ,
-        @@SERVERNAME ,
+SELECT  'Performance' ,
+        'tempdb' ,
         CASE WHEN mf.database_id IS NULL
              THEN 'USE [master]
 GO
@@ -798,7 +801,7 @@ FROM    ( SELECT    1 n
                                 CASE WHEN is_percent_growth = 0
                                      THEN CONVERT(VARCHAR(50), growth * 8)
                                           + 'KB'
-                                     ELSE '%'
+                                     ELSE '256MB'
                                 END growth
                       FROM      sys.master_files imf
                       WHERE     database_id = 2
@@ -842,6 +845,12 @@ FROM    ( SELECT    1117 TraceFlag ,
           UNION ALL
           SELECT    1118 ,
                     'DBCC TRACEON (1118, -1); ' Script
+          UNION ALL
+          SELECT    1222 ,
+                    'DBCC TRACEON (1222, -1); ' Script
+          UNION ALL
+          SELECT    3226 ,
+                    'DBCC TRACEON (3226, -1); ' Script
         ) M
         LEFT JOIN #TraceFlag TF ON TF.TraceFlag = M.TraceFlag
 WHERE   TF.TraceFlag IS NULL
@@ -849,6 +858,70 @@ UNION ALL
 SELECT  Type ,
         DatabaseName ,
         Script
-FROM    @SharePointAG;
+FROM    @SharePointAG
+UNION ALL 
+
+SELECT	'Best Practice' ,
+        db.name ,'USE ' + QUOTENAME(db.name)+ '
+GO
+IF NOT EXISTS (SELECT TOP 1 1 FROM sys.filegroups WHERE [name] = N''SECONDARY'')
+	ALTER DATABASE ' + QUOTENAME(db.name)+ ' ADD FILEGROUP [SECONDARY];
+GO' 
+FROM	sys.databases db
+		CROSS APPLY (SELECT COUNT(DISTINCT mf.data_space_id)[NumberOfFileGroups] FROM sys.master_files mf WHERE mf.database_id = db.database_id AND mf.[type] = 0)ds
+WHERE	db.database_id > 4
+		AND [ds].[NumberOfFileGroups] = 1
+UNION ALL 
+SELECT	'Performance' ,
+        db.name ,'USE [master]
+GO
+ALTER DATABASE ' + QUOTENAME(db.name)+ ' ADD FILE ( NAME = N''' + REPLACE(f1.[name],'<##>',CONVERT(VARCHAR(3), v.Number)) 
+                  + ''', FILENAME = N'''
+                  + REPLACE(f1.[FileName],'<##>',CONVERT(VARCHAR(3), v.Number)) + ''' , SIZE = ' + f1.size + ' , FILEGROWTH = '
+                  + f1.growth + ' ) TO FILEGROUP [SECONDARY]
+GO'		
+FROM	sys.databases db
+		INNER JOIN [master]..spt_values v ON v.[Type] = 'P' 
+		CROSS APPLY (SELECT COUNT(1)[NumberOfFiles] FROM sys.master_files mf WHERE mf.database_id = db.database_id AND mf.[type] = 0)fn
+		CROSS APPLY ( SELECT TOP 1
+                                LEFT(physical_name,
+                                     LEN(physical_name) - CHARINDEX('\',
+                                                              REVERSE(physical_name),
+                                                              1) + 1)
+                                + REPLACE(REVERSE(LEFT(REVERSE(physical_name),
+                                                       CHARINDEX('\',
+                                                              REVERSE(physical_name),
+                                                              1) - 1)), '.mdf',
+                                          '<##>.ndf') [FileName] ,
+                                [name] + N'<##>' [name],
+                                '102400KB' size ,
+                                '262144KB' growth
+                      FROM      sys.master_files imf
+                      WHERE     database_id = db.database_id
+                                AND file_id = 1
+                    ) f1
+WHERE	db.database_id > 4
+		AND v.Number BETWEEN 2 AND 3
+		AND fn.NumberOfFiles = 1
+UNION ALL 
+
+SELECT	'Best Practice' ,
+        db.name ,'USE ' + QUOTENAME(db.name)+ '
+GO
+IF NOT EXISTS (SELECT TOP 1 1 FROM sys.filegroups WHERE is_default = 1 AND name = N''SECONDARY'') ALTER DATABASE ' + QUOTENAME(db.name)+ ' MODIFY FILEGROUP [SECONDARY] DEFAULT;' 
+FROM	sys.databases db
+		CROSS APPLY (SELECT COUNT(DISTINCT mf.data_space_id)[NumberOfFileGroups] FROM sys.master_files mf WHERE mf.database_id = db.database_id AND mf.[type] = 0)ds
+WHERE	db.database_id > 4
+		AND [ds].[NumberOfFileGroups] = 1
+UNION ALL 
+
+SELECT	'Best Practice' ,
+        db.name ,'USE [master]
+GO
+ALTER DATABASE ' + QUOTENAME(db.name)+ ' SET RECOVERY SIMPLE WITH NO_WAIT;
+GO' 
+FROM	sys.databases db
+WHERE	db.database_id = 3
+		AND db.recovery_model = 1;
 DROP TABLE #TraceFlag;
 --select * from #SR_reg
