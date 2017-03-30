@@ -15,15 +15,10 @@ LICENSE:
 USE [master];
 GO
 -- install configuration recommendations by John Eisbrener
---https://dbaeyes.wordpress.com/2011/08/18/hooray-you-finished-installing-sql-server-now-what/
+-- https://dbaeyes.wordpress.com/2011/08/18/hooray-you-finished-installing-sql-server-now-what/
 SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
 SET NOCOUNT ON;
-/*
-Biztalk:https://blogs.msdn.microsoft.com/blogdoezequiel/2009/01/25/sql-best-practices-for-biztalk/
-Auto create statistics must be disabled
-Auto update statistics must be disabled
-MAXDOP (Max degree of parallelism) must be defined as 1 in both SQL Server 2000 and SQL Server 2005 in the instance in which BizTalkMsgBoxDB database exists
-*/
+
 ---------------------------------------------------------------------
 --					D e c l a r a t  i o n 
 ---------------------------------------------------------------------
@@ -121,6 +116,12 @@ IF @IsCRMDynamicsON = 0
 ---------------------------------------------------------------------
 --							BizTalk
 ---------------------------------------------------------------------
+/*
+Biztalk:https://blogs.msdn.microsoft.com/blogdoezequiel/2009/01/25/sql-best-practices-for-biztalk/
+Auto create statistics must be disabled
+Auto update statistics must be disabled
+MAXDOP (Max degree of parallelism) must be defined as 1 in both SQL Server 2000 and SQL Server 2005 in the instance in which BizTalkMsgBoxDB database exists
+*/
 INSERT  @DB_Exclude
         SELECT  D.name
         FROM    sys.databases D
@@ -136,7 +137,31 @@ INSERT  @DB_Exclude
         EXEC sp_MSforeachdb 'SELECT TOP 1 ''[?]''[DatabaseName]
 FROM   [?].sys.database_principals DP
 WHERE  DP.type = ''R'' AND DP.name IN (''SPDataAccess'',''SPReadOnly'')';
+---------------------------------------------------------------------
+--					Team Foundation Server (TFS)
+---------------------------------------------------------------------
+/*
+TFS DB: https://www.visualstudio.com/en-us/docs/setup-admin/tfs/architecture/sql-server-databases
+Understand TFS databases, deployment topologies, and backup: https://www.visualstudio.com/he-il/docs/setup-admin/tfs/admin/backup/backup-db-architecture
+Manually install SQL Server for Team Foundation Server: https://www.visualstudio.com/en-us/docs/setup-admin/tfs/install/sql-server/install-sql-server
+SQL Server Collation Requirements for Team Foundation Server: https://www.visualstudio.com/en-us/docs/setup-admin/tfs/install/sql-server/collation-requirements
+*/
+IF DB_ID('Tfs_Configuration') IS NOT NULL
+BEGIN
+	INSERT  @DB_Exclude
+	EXEC sp_MSforeachdb 'SELECT TOP 1 ''?''[DatabaseName]
+FROM   [?].sys.database_principals DP
+WHERE  DP.type = ''R'' AND DP.name = ''TfsWarehouseDataReader''';
 
+	INSERT  @DB_Exclude
+	SELECT	CR.[DisplayName]
+	FROM	[Tfs_Configuration].[dbo].[tbl_CatalogResource] CR
+			INNER JOIN [Tfs_Configuration].[dbo].[tbl_CatalogResourceType] RC ON RC.Identifier = CR.ResourceType
+	WHERE	RC.DisplayName = 'Team Foundation Project Collection Database'
+			AND CR.[DisplayName] NOT IN(SELECT DatabaseName FROM @DB_Exclude)
+	UNION	SELECT name FROM sys.databases WHERE [name] IN ('TFS_Configuration','TFS_Warehouse','TFS_Analysis') AND state = 0 AND name NOT IN(SELECT DatabaseName FROM @DB_Exclude)
+END
+---------------------------------------------------------------------
 INSERT  INTO #checkversion
         ( version
         )
@@ -184,7 +209,9 @@ SELECT	''TraceFlag'' , @@SERVERNAME,''USE [master]
 GO
 EXEC xp_instance_regwrite N''''HKEY_LOCAL_MACHINE'''', N''''SOFTWARE\\Microsoft\Microsoft SQL Server\\MSSQL'' + @Ver + ''.'' + @InstanceNames + ''\\MSSQLServer\\Parameters'''', N''''SQLArg'' +CONVERT(VARCHAR(10),N.Num + ROW_NUMBER() OVER (ORDER BY N.Num)) + '''''', REG_SZ, '''''' + M.TraceFlag + '''''''' Script
 FROM	(SELECT ''-t1117'' TraceFlag
-UNION ALL SELECT ''-t1118'') M
+UNION ALL SELECT ''-t1118''
+UNION ALL SELECT ''-t3226''
+UNION ALL SELECT ''-t1222'') M
 		LEFT JOIN (
 					select *
 					from sys.dm_server_registry where registry_key = ''HKLM\Software\Microsoft\Microsoft SQL Server\MSSQL'' + @Ver + ''.'' + @InstanceNames + ''\MSSQLServer\Parameters'' and value_name like ''SQLArg%''
@@ -841,16 +868,16 @@ SELECT  'TraceFlag' ,
         @@SERVERNAME ,
         Script
 FROM    ( SELECT    1117 TraceFlag ,
-                    'DBCC TRACEON (1117, -1); ' Script
+                    'DBCC TRACEON (1117, -1); ' Script WHERE @MajorVersion < 1300 --SQL Server 2016
           UNION ALL
           SELECT    1118 ,
-                    'DBCC TRACEON (1118, -1); ' Script
+                    'DBCC TRACEON (1118, -1); ' Script WHERE @MajorVersion < 1300 --SQL Server 2016
           UNION ALL
           SELECT    1222 ,
-                    'DBCC TRACEON (1222, -1); ' Script
+                    'DBCC TRACEON (1222, -1); ' Script WHERE @MajorVersion < 1300 --SQL Server 2016
           UNION ALL
           SELECT    3226 ,
-                    'DBCC TRACEON (3226, -1); ' Script
+                    'DBCC TRACEON (3226, -1); ' Script WHERE @MajorVersion < 1300 --SQL Server 2016
         ) M
         LEFT JOIN #TraceFlag TF ON TF.TraceFlag = M.TraceFlag
 WHERE   TF.TraceFlag IS NULL
@@ -860,7 +887,6 @@ SELECT  Type ,
         Script
 FROM    @SharePointAG
 UNION ALL 
-
 SELECT	'Best Practice' ,
         db.name ,'USE ' + QUOTENAME(db.name)+ '
 GO
