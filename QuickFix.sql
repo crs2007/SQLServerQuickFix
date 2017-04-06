@@ -24,7 +24,9 @@ SET NOCOUNT ON;
 ---------------------------------------------------------------------
 DECLARE @DB_Exclude TABLE ( DatabaseName sysname );
 IF OBJECT_ID('tempdb..#ExcludeDB') IS NOT NULL DROP TABLE #ExcludeDB;
-CREATE TABLE #ExcludeDB(name sysname NOT NULL);
+CREATE TABLE #ExcludeDB([name] sysname NOT NULL);
+IF OBJECT_ID('tempdb..#SharePointDB') IS NOT NULL DROP TABLE #SharePointDB;
+CREATE TABLE #SharePointDB([name] sysname NOT NULL);
 DECLARE @IsCRMDynamicsON BIT;
 DECLARE @cmd NVARCHAR(MAX);
 DECLARE @SharePointAG TABLE
@@ -137,6 +139,31 @@ INSERT  @DB_Exclude
         EXEC sp_MSforeachdb 'SELECT TOP 1 ''[?]''[DatabaseName]
 FROM   [?].sys.database_principals DP
 WHERE  DP.type = ''R'' AND DP.name IN (''SPDataAccess'',''SPReadOnly'')';
+SET @cmd = N'';
+SELECT	@cmd +='
+BEGIN TRY
+	INSERT #SharePointDB
+	SELECT DISTINCT [Name]
+	FROM    ' + QUOTENAME([name]) + '.[dbo].[Objects]
+	WHERE   [Name] IN ( SELECT  name COLLATE DATABASE_DEFAULT FROM sys.databases ) AND [Status] = 0
+	UNION	''' + [name] + ''' [SharePointConfig];
+END TRY
+BEGIN CATCH
+END CATCH'
+FROM	sys.databases
+WHERE	[name] LIKE '%SharePoint[_]Config';
+
+BEGIN TRY
+	EXEC sys.sp_executesql @cmd;
+END TRY
+BEGIN CATCH
+
+END CATCH
+IF EXISTS(SELECT TOP 1 1 FROM #SharePointDB)
+BEGIN
+    INSERT @DB_Exclude SELECT [name] FROM #SharePointDB WHERE [name]  NOT IN (SELECT DatabaseName FROM @DB_Exclude);
+END
+DROP TABLE #SharePointDB;
 ---------------------------------------------------------------------
 --					Team Foundation Server (TFS)
 ---------------------------------------------------------------------
@@ -162,6 +189,10 @@ WHERE  DP.type = ''R'' AND DP.name = ''TfsWarehouseDataReader''';
 	UNION	SELECT name FROM sys.databases WHERE [name] IN ('TFS_Configuration','TFS_Warehouse','TFS_Analysis') AND state = 0 AND name NOT IN(SELECT DatabaseName FROM @DB_Exclude)
 END
 ---------------------------------------------------------------------
+--SELECT * FROM  @DB_Exclude
+--SELECT * FROM  #ExcludeDB X
+
+
 INSERT  INTO #checkversion
         ( version
         )
@@ -567,8 +598,7 @@ WHERE   db.state = 0
         AND db.is_read_only = 0
         AND is_auto_create_stats_on = 0
 		AND NOT EXISTS (SELECT TOP 1 1 FROM #ExcludeDB X WHERE X.name = db.name)
-        AND db.name NOT IN ( SELECT DatabaseName
-                             FROM   @DB_Exclude )
+        AND db.name NOT IN ( SELECT DatabaseName FROM @DB_Exclude )
 UNION ALL
 SELECT  'Auto Create Statistics' [Type] ,
         db.name ,
@@ -873,7 +903,7 @@ SELECT  Type ,
         Script
 FROM    @SharePointAG
 UNION ALL 
-SELECT	'Best Practice' ,
+SELECT	'Secondary FileGroup' ,
         db.name ,'USE ' + QUOTENAME(db.name)+ '
 GO
 IF NOT EXISTS (SELECT TOP 1 1 FROM sys.filegroups WHERE [name] = N''SECONDARY'')
@@ -884,7 +914,7 @@ FROM	sys.databases db
 WHERE	db.database_id > 4
 		AND [ds].[NumberOfFileGroups] = 1
 UNION ALL 
-SELECT	'Performance' ,
+SELECT	'2 Files Secondary FileGroup' ,
         db.name ,'USE [master]
 GO
 ALTER DATABASE ' + QUOTENAME(db.name)+ ' ADD FILE ( NAME = N''' + REPLACE(f1.[name],'<##>',CONVERT(VARCHAR(3), v.Number)) 
@@ -917,7 +947,7 @@ WHERE	db.database_id > 4
 		AND fn.NumberOfFiles = 1
 UNION ALL 
 
-SELECT	'Best Practice' ,
+SELECT	'Default Filegroup' ,
         db.name ,'USE ' + QUOTENAME(db.name)+ '
 GO
 IF NOT EXISTS (SELECT TOP 1 1 FROM sys.filegroups WHERE is_default = 1 AND name = N''SECONDARY'') ALTER DATABASE ' + QUOTENAME(db.name)+ ' MODIFY FILEGROUP [SECONDARY] DEFAULT;' 
@@ -937,3 +967,4 @@ WHERE	db.database_id = 3
 		AND db.recovery_model = 1;
 DROP TABLE #TraceFlag;
 --select * from #SR_reg
+
