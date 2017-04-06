@@ -364,12 +364,10 @@ INSERT  #SR_reg
                 value
         FROM    @reg;
 ----------------------------------------------------------------------------------------------------------------------------------
-             --Error Log file
+--Error Log file
 DELETE  FROM @reg;
-SET @keyi = N'Software\Microsoft\Microsoft SQL Server\MSSQL' + @ver + '.'
-    + @InstanceNames + '\MSSQLServer';
-INSERT  INTO @reg
-        EXECUTE xp_regread N'HKEY_LOCAL_MACHINE', @keyi, N'NumErrorLogs';
+SET @keyi = N'Software\Microsoft\Microsoft SQL Server\MSSQL' + @ver + '.' + @InstanceNames + '\MSSQLServer';
+INSERT  INTO @reg EXECUTE xp_regread N'HKEY_LOCAL_MACHINE', @keyi, N'NumErrorLogs';
 INSERT  #SR_reg
         ( Service ,
           InstanceNames ,
@@ -463,7 +461,7 @@ INSERT  #SR_reg
                   THEN 'Power saver'
                   WHEN '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
                   THEN 'High performance'
-                  ELSE NULL
+                  ELSE 'User Preferance'
                 END
         FROM    @reg;
 -------------------------
@@ -691,12 +689,7 @@ SELECT  'SQL Error Log' ,
         'USE [master]
 GO
 EXEC xp_instance_regwrite N''HKEY_LOCAL_MACHINE'', N''Software\\Microsoft\\MSSQLServer\\MSSQLServer'', N''NumErrorLogs'', REG_DWORD, 30'
-WHERE   EXISTS ( SELECT TOP 1
-                        1
-                 FROM   #SR_reg
-                 WHERE  keyname = 'Number Error Logs'
-                        AND CurrentInstance = 1
-                        AND value < 30 )
+WHERE EXISTS ( SELECT TOP 1 1 FROM #SR_reg WHERE keyname = 'Number Error Logs' AND CurrentInstance = 1 AND value < 30 ) OR NOT EXISTS ( SELECT TOP 1 1 FROM #SR_reg WHERE keyname = 'Number Error Logs' AND CurrentInstance = 1)
 UNION ALL
 SELECT  'SQL Error Log' ,
         @@SERVERNAME ,
@@ -761,16 +754,9 @@ GOTO EndSave
 QuitWithRollback:
     IF (@@TRANCOUNT > 0) ROLLBACK TRANSACTION
 EndSave:'
-WHERE   NOT EXISTS ( SELECT TOP 1
-                            1
-                     FROM   msdb.[dbo].[sysjobs]
-                     WHERE  name = '_Admin_ :: CycleErrorLog' )
-        AND EXISTS ( SELECT TOP 1
-                            1
-                     FROM   #SR_reg
-                     WHERE  keyname = 'Number Error Logs'
-                            AND CurrentInstance = 1
-                            AND value < 30 )
+WHERE   NOT EXISTS ( SELECT TOP 1 1 FROM msdb.[dbo].[sysjobs] WHERE [name] = N'_Admin_ :: CycleErrorLog' )
+        AND (EXISTS ( SELECT TOP 1 1 FROM #SR_reg WHERE keyname = 'Number Error Logs' AND CurrentInstance = 1 AND value < 30 ) OR NOT EXISTS ( SELECT TOP 1 1 FROM #SR_reg WHERE keyname = 'Number Error Logs' AND CurrentInstance = 1))
+
 UNION ALL
 SELECT  'Windows Power Plan' ,
         @@SERVERNAME ,
