@@ -28,6 +28,7 @@ CREATE TABLE #ExcludeDB([name] sysname NOT NULL);
 IF OBJECT_ID('tempdb..#SharePointDB') IS NOT NULL DROP TABLE #SharePointDB;
 CREATE TABLE #SharePointDB([name] sysname NOT NULL);
 DECLARE @IsCRMDynamicsON BIT;
+DECLARE @error NVARCHAR(2048);
 DECLARE @cmd NVARCHAR(MAX);
 DECLARE @SharePointAG TABLE
     (
@@ -146,18 +147,20 @@ BEGIN TRY
 	SELECT DISTINCT [Name]
 	FROM    ' + QUOTENAME([name]) + '.[dbo].[Objects]
 	WHERE   [Name] IN ( SELECT  name COLLATE DATABASE_DEFAULT FROM sys.databases ) AND [Status] = 0
-	UNION	''' + [name] + ''' [SharePointConfig];
+	UNION	SELECT ''' + [name] + ''' [SharePointConfig];
 END TRY
 BEGIN CATCH
 END CATCH'
 FROM	sys.databases
-WHERE	[name] LIKE '%SharePoint[_]Config';
+WHERE	[name] LIKE '%[_]Config';
 
 BEGIN TRY
 	EXEC sys.sp_executesql @cmd;
 END TRY
 BEGIN CATCH
-
+	PRINT @cmd;
+	SET @error = ERROR_MESSAGE();
+	RAISERROR(@error,16,1) WITH NOWAIT;
 END CATCH
 IF EXISTS(SELECT TOP 1 1 FROM #SharePointDB)
 BEGIN
@@ -967,4 +970,3 @@ WHERE	db.database_id = 3
 		AND db.recovery_model = 1;
 DROP TABLE #TraceFlag;
 --select * from #SR_reg
-
