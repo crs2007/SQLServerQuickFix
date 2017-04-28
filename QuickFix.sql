@@ -20,7 +20,7 @@ SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
 SET NOCOUNT ON;
 
 ---------------------------------------------------------------------
---					D e c l a r a t  i o n 
+--					D e c l a r a t i o n 
 ---------------------------------------------------------------------
 DECLARE @DB_Exclude TABLE ( DatabaseName sysname );
 IF OBJECT_ID('tempdb..#ExcludeDB') IS NOT NULL DROP TABLE #ExcludeDB;
@@ -80,6 +80,8 @@ DECLARE @Tempreg TABLE
       keyname CHAR(200) ,
       value VARCHAR(1000)
     );
+DECLARE @MSver TABLE (ID INT,  Name  sysname, Internal_Value INT, Value nvarchar(512))
+INSERT @MSver EXEC master.dbo.xp_msver
 IF OBJECT_ID('tempdb..#SR_reg') IS NOT NULL
     DROP TABLE #SR_reg;
 CREATE TABLE #SR_reg
@@ -241,7 +243,7 @@ END;
 SET @cmd = 'INSERT #dm_server_registry
 SELECT	''TraceFlag'' , @@SERVERNAME,''USE [master]
 GO
-EXEC xp_instance_regwrite N''''HKEY_LOCAL_MACHINE'''', N''''SOFTWARE\\Microsoft\Microsoft SQL Server\\MSSQL'' + @Ver + ''.'' + @InstanceNames + ''\\MSSQLServer\\Parameters'''', N''''SQLArg'' +CONVERT(VARCHAR(10),N.Num + ROW_NUMBER() OVER (ORDER BY N.Num)) + '''''', REG_SZ, '''''' + M.TraceFlag + '''''''' Script
+EXEC xp_instance_regwrite N''''HKEY_LOCAL_MACHINE'''', N''''SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL'' + @Ver + ''.'' + @InstanceNames + ''\MSSQLServer\Parameters'''', N''''SQLArg'' +CONVERT(VARCHAR(10),N.Num + ROW_NUMBER() OVER (ORDER BY N.Num)) + '''''', REG_SZ, '''''' + M.TraceFlag + '''''''' Script
 FROM	(SELECT ''-t1117'' TraceFlag
 UNION ALL SELECT ''-t1118''
 UNION ALL SELECT ''-t3226''
@@ -646,6 +648,15 @@ reconfigure'
 FROM    sys.configurations
 WHERE   name = 'show advanced options'
         AND value = 0
+UNION ALL             
+SELECT  'Configuration' [Type] ,
+        @@SERVERNAME ,
+        'exec sp_configure ''' + name + ''',' + [OS_RAM] +';
+reconfigure'
+FROM    sys.configurations C
+		CROSS APPLY(SELECT TOP 1 CONVERT(VARCHAR(25),Internal_Value * 0.8) [OS_RAM] FROM @MSver S WHERE Name = 'PhysicalMemory')CA
+WHERE   name = 'max server memory (MB)'
+        AND value = 2147483647
 UNION ALL
 SELECT  'Configuration' [Type] ,
         @@SERVERNAME ,
@@ -721,7 +732,7 @@ SELECT  'SQL Error Log' ,
         @@SERVERNAME ,
         'USE [master]
 GO
-EXEC xp_instance_regwrite N''HKEY_LOCAL_MACHINE'', N''Software\\Microsoft\\MSSQLServer\\MSSQLServer'', N''NumErrorLogs'', REG_DWORD, 30'
+EXEC xp_instance_regwrite N''HKEY_LOCAL_MACHINE'', N''Software\Microsoft\MSSQLServer\MSSQLServer'', N''NumErrorLogs'', REG_DWORD, 30'
 WHERE EXISTS ( SELECT TOP 1 1 FROM #SR_reg WHERE keyname = 'Number Error Logs' AND CurrentInstance = 1 AND value < 30 ) OR NOT EXISTS ( SELECT TOP 1 1 FROM #SR_reg WHERE keyname = 'Number Error Logs' AND CurrentInstance = 1)
 UNION ALL
 SELECT  'SQL Error Log' ,
@@ -789,13 +800,12 @@ QuitWithRollback:
 EndSave:'
 WHERE   NOT EXISTS ( SELECT TOP 1 1 FROM msdb.[dbo].[sysjobs] WHERE [name] = N'_Admin_ :: CycleErrorLog' )
         AND (EXISTS ( SELECT TOP 1 1 FROM #SR_reg WHERE keyname = 'Number Error Logs' AND CurrentInstance = 1 AND value < 30 ) OR NOT EXISTS ( SELECT TOP 1 1 FROM #SR_reg WHERE keyname = 'Number Error Logs' AND CurrentInstance = 1))
-
 UNION ALL
 SELECT  'Windows Power Plan' ,
         @@SERVERNAME ,
         'USE [master]
 GO
-EXEC xp_instance_regwrite N''HKEY_LOCAL_MACHINE'', N''SYSTEM\\ControlSet001\\Control\\Power\\User\\PowerSchemes'', N''ActivePowerScheme'', REG_SZ, ''8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c''' Script
+EXEC xp_instance_regwrite N''HKEY_LOCAL_MACHINE'', N''SYSTEM\ControlSet001\Control\Power\User\PowerSchemes'', N''ActivePowerScheme'', REG_SZ, ''8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c''' Script
 WHERE   EXISTS ( SELECT TOP 1
                         1
                  FROM   #SR_reg
