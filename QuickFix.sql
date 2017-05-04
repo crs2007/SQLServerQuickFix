@@ -104,11 +104,18 @@ DECLARE @AgentServiceNamei VARCHAR(8000);
 ---------------------------------------------------------------------
 --							CRM Dynamics
 ---------------------------------------------------------------------
-INSERT  @DB_Exclude
-        SELECT  D.name
-        FROM    sys.databases D
-        WHERE   D.name IN ( 'MSCRM_CONFIG', 'OrganizationName_MSCRM' );
-
+IF DB_ID('MSCRM_CONFIG') IS NOT NULL
+BEGIN
+	INSERT @DB_Exclude
+	SELECT D.name
+	FROM   sys.databases D
+	WHERE  D.name = 'MSCRM_CONFIG'
+			OR D.name LIKE '%[_]MSCRM'
+	UNION
+	SELECT [DatabaseName] COLLATE DATABASE_DEFAULT
+	FROM   [MSCRM_CONFIG].[dbo].[Organization]
+	OPTION  ( RECOMPILE );
+END
 SET @IsCRMDynamicsON = 0;
 SELECT TOP 1
         @IsCRMDynamicsON = 1
