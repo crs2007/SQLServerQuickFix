@@ -164,7 +164,7 @@ FROM	sys.databases
 WHERE	[name] LIKE '%[_]Config';
 
 BEGIN TRY
-	EXEC sys.sp_executesql @cmd;
+	EXEC master.sys.sp_executesql @cmd;
 END TRY
 BEGIN CATCH
 	PRINT @cmd;
@@ -295,6 +295,7 @@ INSERT  #SR_reg
              
              
              -------------------------------------------------------------------------------
+
 IF @InstanceNames = @@SERVICENAME
     BEGIN
         SET @ver = CAST(SERVERPROPERTY('ProductVersion') AS NVARCHAR);
@@ -321,9 +322,17 @@ IF @InstanceNames = @@SERVICENAME
    
         ELSE
             SELECT  @ver = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1);
+			
         IF @ver > '9'
             BEGIN
-                EXEC sp_executesql @cmd;
+				BEGIN TRY
+					EXEC master.sys.sp_executesql @cmd;
+				END TRY
+				BEGIN CATCH
+					PRINT @cmd;
+					SET @error = ERROR_MESSAGE();
+					RAISERROR(@error,16,1) WITH NOWAIT;
+				END CATCH
             END;
     END;
                     
@@ -337,10 +346,11 @@ DELETE  FROM @reg;
 DELETE  FROM @Tempreg; 
 INSERT  INTO @Tempreg
         EXECUTE xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'CurrentVersion';
-                    
+               
 SELECT  @ver = value
 FROM    @Tempreg;
-IF LEN(@ver) > 1
+
+IF LEN(@ver) > 1 AND EXISTS(SELECT TOP 1 1 FROM @Tempreg)
     BEGIN
         SET @ComptabilityLevel = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1)
             + SUBSTRING(SUBSTRING(@ver, CHARINDEX('.', @ver) + 1, LEN(@ver)),
