@@ -812,7 +812,26 @@ SELECT  'Windows Power Plan' ,
         @@SERVERNAME ,
         'USE [master]
 GO
-EXEC xp_instance_regwrite N''HKEY_LOCAL_MACHINE'', N''SYSTEM\ControlSet001\Control\Power\User\PowerSchemes'', N''ActivePowerScheme'', REG_SZ, ''8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c''' Script
+BEGIN TRY
+	EXEC xp_instance_regwrite N''HKEY_LOCAL_MACHINE'', N''SYSTEM\ControlSet001\Control\Power\User\PowerSchemes'', N''ActivePowerScheme'', REG_SZ, ''8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c''
+	DECLARE @PowerShell VARCHAR(4000);
+	DECLARE @output TABLE (line VARCHAR(255));
+	SET @PowerShell = ''powershell.exe -noprofile -command "Try {$HighPerf = powercfg -l | %{if($_.contains(''''High performance'''')) {$_.split()[3]}} $CurrPlan = $(powercfg -getactivescheme).split()[3] IF ($CurrPlan -ne $HighPerf) {powercfg -setactive $HighPerf}} Catch {Write-Warning -Message ''''Access is denied''''}"'';
+	INSERT @output
+	EXEC master.sys.xp_cmdshell @PowerShell;
+
+	IF EXISTS(SELECT TOP 1 1 FROM @output WHERE line = ''WARNING: Access is denied'')
+		RAISERROR(''Unable to set power plan to "High Performance"'',16,1);
+END TRY
+BEGIN CATCH
+	DECLARE @err NVARCHAR(2048);
+	SET @err = ERROR_MESSAGE() + ''
+Try to change it manually - https://blog.sqlauthority.com/2015/04/27/sql-server-using-high-performance-power-plan-for-sql-server
+You can read more - 
+	https://blogs.msdn.microsoft.com/cindygross/2011/03/09/power-saving-options-on-sql-server
+	https://support.microsoft.com/en-us/help/2207548/slow-performance-on-windows-server-when-using-the-balanced-power-plan''
+	RAISERROR(@err,16,1);
+END CATCH' Script
 WHERE   EXISTS ( SELECT TOP 1
                         1
                  FROM   #SR_reg
