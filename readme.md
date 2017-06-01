@@ -5,6 +5,7 @@ Fix default behaviour of SQL Server
 ### Support
 - [x] SQL Server 2005 and Up
 - [x] Case sensitive
+- [x] SQL Server 2017(With Linux) support
 
 ### Installation
 Just run script as-is on your SQL Server.
