@@ -214,7 +214,11 @@ END
 ---------------------------------------------------------------------
 --SELECT * FROM  @DB_Exclude
 --SELECT * FROM  #ExcludeDB X
-
+INSERT	#ExcludeDB
+SELECT	name
+FROM	sys.databases
+WHERE	DATABASEPROPERTYEX(name, 'Updateability') = 'READ_ONLY'
+OPTION(RECOMPILE);
 
 INSERT  INTO #checkversion
         ( version
@@ -223,7 +227,8 @@ INSERT  INTO #checkversion
 SELECT  @MajorVersion = major + CASE WHEN minor = 0 THEN '00'
                                      ELSE minor
                                 END
-FROM    #checkversion;
+FROM    #checkversion
+OPTION(RECOMPILE);
 
 IF @MajorVersion > 1050 AND SERVERPROPERTY('IsHadrEnabled') = 1--2012
 BEGIN
@@ -575,6 +580,99 @@ BEGIN
 					value
 			FROM    @reg;
 END
+DECLARE @Scripts TABLE([Type] sysname NOT NULL,[Database Name] sysname NOT NULL,[Script] NVARCHAR(MAX) NOT NULL);
+DECLARE @Operator sysname;
+SET @Operator = '<Your Operator>';
+IF (SELECT	COUNT(1)
+FROM	msdb.dbo.sysoperators) = 1
+BEGIN
+    SELECT	@Operator = name
+    FROM	msdb.dbo.sysoperators
+	OPTION (RECOMPILE);
+END
+INSERT @Scripts
+SELECT TOP 1 'History Purged' [Type] ,
+        'MSDB' [Database Name] ,'USE [msdb]
+GO
+
+BEGIN TRANSACTION
+DECLARE @ReturnCode INT
+SELECT @ReturnCode = 0;
+IF NOT EXISTS (SELECT name FROM msdb.dbo.syscategories WHERE name=N''DBA'' AND category_class=1)
+BEGIN
+EXEC @ReturnCode = msdb.dbo.sp_add_category @class=N''JOB'', @type=N''LOCAL'', @name=N''DBA''
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+
+END
+
+DECLARE @jobId BINARY(16)
+EXEC @ReturnCode =  msdb.dbo.sp_add_job @job_name=N''MP - MSDB History Purged'', 
+		@enabled=1, 
+		@notify_level_eventlog=0, 
+		@notify_level_email=2, 
+		@notify_level_netsend=0, 
+		@notify_level_page=0, 
+		@delete_level=0, 
+		@description=N''This job create by running script from https://github.com/crs2007/SQLServerQuickFix/blob/master/QuickFix.sql'', 
+		@category_name=N''DBA'', 
+		@owner_login_name=N''sa'', 
+		@notify_email_operator_name=N''' + @Operator +''', @job_id = @jobId OUTPUT
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+EXEC @ReturnCode = msdb.dbo.sp_add_jobstep @job_id=@jobId, @step_name=N''MSDB Purged'', 
+		@step_id=1, 
+		@cmdexec_success_code=0, 
+		@on_success_action=1, 
+		@on_success_step_id=0, 
+		@on_fail_action=2, 
+		@on_fail_step_id=0, 
+		@retry_attempts=0, 
+		@retry_interval=0, 
+		@os_run_priority=0, @subsystem=N''TSQL'', 
+		@command=N''DECLARE @dt datetime; 
+SET @dt = DATEADD(DAY,-14,GETDATE());
+
+EXECUTE  msdb.dbo.sp_delete_backuphistory @dt;
+
+EXECUTE  msdb.dbo.sp_purge_jobhistory  @oldest_date=@dt;
+
+EXECUTE msdb..sp_maintplan_delete_log null,null,@dt;
+'', 
+		@database_name=N''msdb'', 
+		@flags=0
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+EXEC @ReturnCode = msdb.dbo.sp_update_job @job_id = @jobId, @start_step_id = 1
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+EXEC @ReturnCode = msdb.dbo.sp_add_jobschedule @job_id=@jobId, @name=N''MP - MSDB History Purged'', 
+		@enabled=1, 
+		@freq_type=4, 
+		@freq_interval=1, 
+		@freq_subday_type=1, 
+		@freq_subday_interval=0, 
+		@freq_relative_interval=0, 
+		@freq_recurrence_factor=0, 
+		@active_start_date=20170706, 
+		@active_end_date=99991231, 
+		@active_start_time=0, 
+		@active_end_time=235959, 
+		@schedule_uid=N''ccc2b9ef-a828-4004-ba3f-246ba56ba633''
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+EXEC @ReturnCode = msdb.dbo.sp_add_jobserver @job_id = @jobId, @server_name = N''(local)''
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+COMMIT TRANSACTION
+GOTO EndSave
+QuitWithRollback:
+    IF (@@TRANCOUNT > 0) ROLLBACK TRANSACTION
+EndSave:
+
+GO'
+        
+FROM    msdb.dbo.backupset bs
+WHERE	bs.backup_start_date < DATEADD(DAY,-40,GETDATE())
+ORDER BY backup_set_id ASC;
+
+
+
+
 SELECT  'PAGE VERIFY' [Type] ,
         db.name [Database Name] ,
         N'ALTER DATABASE [' + db.name
@@ -1021,6 +1119,12 @@ ALTER DATABASE ' + QUOTENAME(db.name)+ ' SET RECOVERY SIMPLE WITH NO_WAIT;
 GO' 
 FROM	sys.databases db
 WHERE	db.database_id = 3
-		AND db.recovery_model = 1;
+		AND db.recovery_model = 1
+
+UNION ALL
+SELECT	Type,
+        [Database Name],
+        Script
+FROM	@Scripts;
 DROP TABLE #TraceFlag;
 --select * from #SR_reg
