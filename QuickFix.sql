@@ -212,8 +212,6 @@ WHERE  DP.type = ''R'' AND DP.name = ''TfsWarehouseDataReader''';
 	UNION	SELECT name FROM sys.databases WHERE [name] IN ('TFS_Configuration','TFS_Warehouse','TFS_Analysis') AND state = 0 AND name NOT IN(SELECT DatabaseName FROM @DB_Exclude)
 END
 ---------------------------------------------------------------------
---SELECT * FROM  @DB_Exclude
---SELECT * FROM  #ExcludeDB X
 INSERT	#ExcludeDB
 SELECT	name
 FROM	sys.databases
@@ -596,16 +594,16 @@ SELECT TOP 1 'History Purged' [Type] ,
 GO
 
 BEGIN TRANSACTION
-DECLARE @ReturnCode INT
+DECLARE @ReturnCode INT;
 SELECT @ReturnCode = 0;
 IF NOT EXISTS (SELECT name FROM msdb.dbo.syscategories WHERE name=N''DBA'' AND category_class=1)
 BEGIN
-EXEC @ReturnCode = msdb.dbo.sp_add_category @class=N''JOB'', @type=N''LOCAL'', @name=N''DBA''
-IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+EXEC @ReturnCode = msdb.dbo.sp_add_category @class=N''JOB'', @type=N''LOCAL'', @name=N''DBA'';
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback;
 
 END
 
-DECLARE @jobId BINARY(16)
+DECLARE @jobId BINARY(16);
 EXEC @ReturnCode =  msdb.dbo.sp_add_job @job_name=N''MP - MSDB History Purged'', 
 		@enabled=1, 
 		@notify_level_eventlog=0, 
@@ -616,8 +614,8 @@ EXEC @ReturnCode =  msdb.dbo.sp_add_job @job_name=N''MP - MSDB History Purged'',
 		@description=N''This job create by running script from https://github.com/crs2007/SQLServerQuickFix/blob/master/QuickFix.sql'', 
 		@category_name=N''DBA'', 
 		@owner_login_name=N''sa'', 
-		@notify_email_operator_name=N''' + @Operator +''', @job_id = @jobId OUTPUT
-IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+		@notify_email_operator_name=N''' + @Operator +''', @job_id = @jobId OUTPUT;
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback;
 EXEC @ReturnCode = msdb.dbo.sp_add_jobstep @job_id=@jobId, @step_name=N''MSDB Purged'', 
 		@step_id=1, 
 		@cmdexec_success_code=0, 
@@ -639,9 +637,9 @@ EXECUTE msdb..sp_maintplan_delete_log null,null,@dt;
 '', 
 		@database_name=N''msdb'', 
 		@flags=0
-IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
-EXEC @ReturnCode = msdb.dbo.sp_update_job @job_id = @jobId, @start_step_id = 1
-IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback;
+EXEC @ReturnCode = msdb.dbo.sp_update_job @job_id = @jobId, @start_step_id = 1;
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback;
 EXEC @ReturnCode = msdb.dbo.sp_add_jobschedule @job_id=@jobId, @name=N''MP - MSDB History Purged'', 
 		@enabled=1, 
 		@freq_type=4, 
@@ -654,16 +652,16 @@ EXEC @ReturnCode = msdb.dbo.sp_add_jobschedule @job_id=@jobId, @name=N''MP - MSD
 		@active_end_date=99991231, 
 		@active_start_time=0, 
 		@active_end_time=235959, 
-		@schedule_uid=N''ccc2b9ef-a828-4004-ba3f-246ba56ba633''
-IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
-EXEC @ReturnCode = msdb.dbo.sp_add_jobserver @job_id = @jobId, @server_name = N''(local)''
-IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+		@schedule_uid=N''ccc2b9ef-a828-4004-ba3f-246ba56ba633'';
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback;
+EXEC @ReturnCode = msdb.dbo.sp_add_jobserver @job_id = @jobId, @server_name = N''(local)'';
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback;
 COMMIT TRANSACTION
-GOTO EndSave
+GOTO EndSave;
 QuitWithRollback:
-    IF (@@TRANCOUNT > 0) ROLLBACK TRANSACTION
+    IF (@@TRANCOUNT > 0) ROLLBACK TRANSACTION;
 EndSave:
-
+--
 GO'
         
 FROM    msdb.dbo.backupset bs
@@ -862,14 +860,14 @@ UNION ALL
 SELECT  'SQL Error Log' ,
         @@SERVERNAME ,
         'BEGIN TRANSACTION
-DECLARE @ReturnCode INT
+DECLARE @ReturnCode INT;
 SELECT @ReturnCode = 0
 IF NOT EXISTS (SELECT name FROM msdb.dbo.syscategories WHERE name=N''DBA'' AND category_class=1)
 BEGIN
-	EXEC @ReturnCode = msdb.dbo.sp_add_category @class=N''JOB'', @type=N''LOCAL'', @name=N''DBA''
-	IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+	EXEC @ReturnCode = msdb.dbo.sp_add_category @class=N''JOB'', @type=N''LOCAL'', @name=N''DBA'';
+	IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback;
 END
-DECLARE @jobId BINARY(16)
+DECLARE @jobId BINARY(16);
 EXEC @ReturnCode =  msdb.dbo.sp_add_job @job_name=N''_Admin_ :: CycleErrorLog'', 
              @enabled=1, 
              @notify_level_eventlog=0, 
@@ -879,8 +877,8 @@ EXEC @ReturnCode =  msdb.dbo.sp_add_job @job_name=N''_Admin_ :: CycleErrorLog'',
              @delete_level=0, 
              @description=N''sp_cycle_errorlog.'', 
              @category_name=N''DBA'', 
-             @owner_login_name=N''sa'', @job_id = @jobId OUTPUT
-IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+             @owner_login_name=N''sa'', @job_id = @jobId OUTPUT;
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback;
 EXEC @ReturnCode = msdb.dbo.sp_add_jobstep @job_id=@jobId, @step_name=N''CycleErrorLog'', 
              @step_id=1, 
              @cmdexec_success_code=0, 
@@ -893,10 +891,10 @@ EXEC @ReturnCode = msdb.dbo.sp_add_jobstep @job_id=@jobId, @step_name=N''CycleEr
              @os_run_priority=0, @subsystem=N''TSQL'', 
              @command=N''EXEC sp_cycle_errorlog;'', 
              @database_name=N''master'', 
-             @flags=0
-IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
-EXEC @ReturnCode = msdb.dbo.sp_update_job @job_id = @jobId, @start_step_id = 1
-IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+             @flags=0;
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback;
+EXEC @ReturnCode = msdb.dbo.sp_update_job @job_id = @jobId, @start_step_id = 1;
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback;
 EXEC @ReturnCode = msdb.dbo.sp_add_jobschedule @job_id=@jobId, @name=N''MidNight'', 
              @enabled=1, 
              @freq_type=4, 
@@ -909,14 +907,14 @@ EXEC @ReturnCode = msdb.dbo.sp_add_jobschedule @job_id=@jobId, @name=N''MidNight
              @active_end_date=99991231, 
              @active_start_time=1, 
              @active_end_time=235959, 
-             @schedule_uid=N''994a993a-227f-463f-9742-f2cba8623403''
-IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
-EXEC @ReturnCode = msdb.dbo.sp_add_jobserver @job_id = @jobId, @server_name = N''(local)''
-IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
-COMMIT TRANSACTION
-GOTO EndSave
+             @schedule_uid=N''994a993a-227f-463f-9742-f2cba8623403'';
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback;
+EXEC @ReturnCode = msdb.dbo.sp_add_jobserver @job_id = @jobId, @server_name = N''(local)'';
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback;
+COMMIT TRANSACTION;
+GOTO EndSave;
 QuitWithRollback:
-    IF (@@TRANCOUNT > 0) ROLLBACK TRANSACTION
+    IF (@@TRANCOUNT > 0) ROLLBACK TRANSACTION;
 EndSave:'
 WHERE   NOT EXISTS ( SELECT TOP 1 1 FROM msdb.[dbo].[sysjobs] WHERE [name] = N'_Admin_ :: CycleErrorLog' )
         AND (EXISTS ( SELECT TOP 1 1 FROM #SR_reg WHERE keyname = 'Number Error Logs' AND CurrentInstance = 1 AND value < 30 ) OR NOT EXISTS ( SELECT TOP 1 1 FROM #SR_reg WHERE keyname = 'Number Error Logs' AND CurrentInstance = 1))
