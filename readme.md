@@ -8,11 +8,14 @@ Fix default behaviour of SQL Server
 - [x] SQL Server 2017(With Linux) support
 
 ### Installation
-If you are using SSMS 2016 and above you should turn on the option - ["Retain CR/LF (carriage return / Line Feed) on copy or save"](https://blog.sqlauthority.com/2016/06/03/sql-server-maintain-carriage-return-enter-key-ssms-2016-copy-paste/)
-Just run script as-is on your SQL Server.
-Deside what of the output you want to run, in order to fix issue.
+* If you are using SSMS 2016 and above you should turn on the option - ["Retain CR/LF (carriage return / Line Feed) on copy or save"](https://blog.sqlauthority.com/2016/06/03/sql-server-maintain-carriage-return-enter-key-ssms-2016-copy-paste/)
+* Run the script as-is on your SQL Server.
+* Deside what of the output you want to run, in order to fix issue.
+* Change the operator name if needed for your own.
+
 ### Security Configuration
 Make sure you have system administrator privilege on the SQL server instance.
+
 ### Useful links
 1. [SQL best practices for Biztalk](https://blogs.msdn.microsoft.com/blogdoezequiel/2009/01/25/sql-best-practices-for-biztalk)
 2. [Best practices for SQL Server in a SharePoint Server farm](https://technet.microsoft.com/en-us/library/hh292622.aspx)  
