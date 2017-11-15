@@ -112,7 +112,12 @@ DECLARE @keyi VARCHAR(8000);
              
 DECLARE @SQLServiceNamei VARCHAR(8000);
 DECLARE @AgentServiceNamei VARCHAR(8000);
-
+DECLARE @tempDBDataFiles INT;
+SELECT	@tempDBDataFiles = COUNT(1)
+FROM	master.sys.master_files
+WHERE	database_id = 2
+		AND type = 0
+OPTION(RECOMPILE);
 ---------------------------------------------------------------------
 --							CRM Dynamics
 ---------------------------------------------------------------------
@@ -262,8 +267,7 @@ WHERE	rs.role != 1;');
 END;
 
 SET @cmd = 'INSERT #dm_server_registry
-SELECT	''TraceFlag'' , @@SERVERNAME,''USE [master]
-GO
+SELECT	''TraceFlag'' , @@SERVERNAME,''USE [master];
 EXEC xp_instance_regwrite N''''HKEY_LOCAL_MACHINE'''', N''''SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL'' + @Ver + ''.'' + @InstanceNames + ''\MSSQLServer\Parameters'''', N''''SQLArg'' +CONVERT(VARCHAR(10),N.Num + ROW_NUMBER() OVER (ORDER BY N.Num)) + '''''', REG_SZ, '''''' + M.TraceFlag + '''''''' Script
 FROM	(SELECT ''-t1117'' TraceFlag
 UNION ALL SELECT ''-t1118''
@@ -590,9 +594,7 @@ BEGIN
 END
 INSERT @Scripts
 SELECT TOP 1 'History Purged' [Type] ,
-        'MSDB' [Database Name] ,'USE [msdb]
-GO
-
+        'MSDB' [Database Name] ,'USE [msdb];
 BEGIN TRANSACTION
 DECLARE @ReturnCode INT;
 SELECT @ReturnCode = 0;
@@ -661,11 +663,11 @@ GOTO EndSave;
 QuitWithRollback:
     IF (@@TRANCOUNT > 0) ROLLBACK TRANSACTION;
 EndSave:
---
-GO'
+'
         
 FROM    msdb.dbo.backupset bs
 WHERE	bs.backup_start_date < DATEADD(DAY,-40,GETDATE())
+		AND NOT EXISTS(SELECT TOP 1 1 FROM msdb.dbo.sysjobs j WHERE j.name = 'MP - MSDB History Purged' AND j.enabled = 1)		
 ORDER BY backup_set_id ASC;
 
 
@@ -852,8 +854,7 @@ WHERE   owner_sid != 0x01
 UNION ALL
 SELECT  'SQL Error Log' ,
         @@SERVERNAME ,
-        'USE [master]
-GO
+        'USE [master];
 EXEC xp_instance_regwrite N''HKEY_LOCAL_MACHINE'', N''Software\Microsoft\MSSQLServer\MSSQLServer'', N''NumErrorLogs'', REG_DWORD, 30'
 WHERE @IsLinux = 0 AND (EXISTS ( SELECT TOP 1 1 FROM #SR_reg WHERE keyname = 'Number Error Logs' AND CurrentInstance = 1 AND value < 30 ) OR NOT EXISTS ( SELECT TOP 1 1 FROM #SR_reg WHERE keyname = 'Number Error Logs' AND CurrentInstance = 1))
 UNION ALL
@@ -952,31 +953,19 @@ WHERE   EXISTS ( SELECT TOP 1 1
 UNION ALL
 SELECT  'Performance' ,
         'tempdb' ,
-        CASE WHEN mf.database_id IS NULL
-             THEN 'USE [master]
-GO
+        CASE WHEN df.file_guid IS NULL
+             THEN 'USE [master];
 ALTER DATABASE [tempdb] ADD FILE ( NAME = N''tempdev'
                   + CONVERT(VARCHAR(3), Num.n) + ''', FILENAME = N'''
                   + FileName + ''' , SIZE = ' + maxS.size + ' , FILEGROWTH = '
-                  + f1.growth + ' )
-GO'          WHEN MakeSameSize.Script IS NOT NULL THEN MakeSameSize.Script
+                  + f1.growth + ' );
+'          WHEN MakeSameSize.Script IS NOT NULL THEN MakeSameSize.Script
              ELSE NULL
         END
-FROM    ( SELECT    1 n
-          UNION ALL
-          SELECT    2 n
-          UNION ALL
-          SELECT    3 n
-          UNION ALL
-          SELECT    4 n
-          UNION ALL
-          SELECT    5 n
-          UNION ALL
-          SELECT    6 n
-          UNION ALL
-          SELECT    7 n
-          UNION ALL
-          SELECT    8 n
+FROM    (	SELECT	v.number AS [n]
+			FROM	master..spt_values v
+			WHERE	v.[Type] = 'P' 
+					AND Number BETWEEN 1 AND 32
         ) Num
         CROSS APPLY ( SELECT TOP 1
                                 LEFT(physical_name,
@@ -996,34 +985,32 @@ FROM    ( SELECT    1 n
                                           + 'KB'
                                      ELSE '256MB'
                                 END growth
-                      FROM      sys.master_files imf
-                      WHERE     database_id = 2
-                                AND file_id = 1
+                      FROM      tempdb.sys.database_files
+                      WHERE     file_id = 1
                     ) f1
         CROSS APPLY ( SELECT    CONVERT(VARCHAR(50), MAX(size * 8 / 1024))
                                 + 'MB' size ,
                                 MAX(size) OriginalSize
-                      FROM      sys.master_files imf
-                      WHERE     database_id = 2
-                                AND imf.type = 0
+                      FROM      tempdb.sys.database_files imf
+                      WHERE     imf.type = 0
                     ) maxS
-        LEFT JOIN sys.master_files mf ON CASE WHEN mf.file_id > 1
-                                              THEN mf.file_id - 1
+        LEFT JOIN tempdb.sys.database_files df ON CASE WHEN df.file_id > 1
+                                              THEN df.file_id - 1
                                               ELSE 1
                                          END = Num.n
-                                         AND database_id = 2
                                          AND type = 0
         OUTER APPLY ( SELECT TOP 1
                                 'ALTER DATABASE [tempdb] MODIFY FILE ( NAME = N'''
-                                + mf.name + ''', SIZE = ' + maxS.size + ');' Script
-                      WHERE     maxS.OriginalSize != mf.size
+                                + df.name + ''', SIZE = ' + maxS.size + ');' Script
+                      WHERE     maxS.OriginalSize != df.size
                     ) MakeSameSize
-WHERE   Num.n <= ( SELECT   CASE WHEN cpu_count > 8 THEN 8
+WHERE   Num.n <= ( SELECT   CASE WHEN cpu_count >= 8 AND @tempDBDataFiles <= 8 THEN 8
+								 WHEN cpu_count >= 8 AND @tempDBDataFiles > 8 THEN @tempDBDataFiles
                                  ELSE cpu_count
                             END
                    FROM     sys.dm_os_sys_info
                  )
-        AND ( mf.database_id IS NULL
+        AND ( df.file_guid IS NULL
               OR MakeSameSize.Script IS NOT NULL
             )
 UNION ALL
@@ -1033,7 +1020,7 @@ UNION ALL
 SELECT  'TraceFlag' ,
         @@SERVERNAME ,
         Script
-FROM    ( SELECT    1117 TraceFlag ,
+FROM    ( SELECT    1117 AS [TraceFlag] ,
                     'DBCC TRACEON (1117, -1); ' Script WHERE @MajorVersion < 1300 --SQL Server 2016
           UNION ALL
           SELECT    1118 ,
@@ -1044,6 +1031,9 @@ FROM    ( SELECT    1117 TraceFlag ,
           UNION ALL
           SELECT    3226 ,
                     'DBCC TRACEON (3226, -1); ' Script WHERE @MajorVersion < 1300 --SQL Server 2016
+          UNION ALL
+          SELECT    1211 ,
+                    'DBCC TRACEON (1211, -1); /*resolve-blocking-problems-that-are-caused-by-lock-escalation https://support.microsoft.com/en-us/help/323630/how-to-resolve-blocking-problems-that-are-caused-by-lock-escalation-in*/' Script 
         ) M
         LEFT JOIN #TraceFlag TF ON TF.TraceFlag = M.TraceFlag
 WHERE   TF.TraceFlag IS NULL
@@ -1054,11 +1044,10 @@ SELECT  Type ,
 FROM    @SharePointAG
 UNION ALL 
 SELECT	'Secondary FileGroup' ,
-        db.name ,'USE ' + QUOTENAME(db.name)+ '
-GO
+        db.name ,'USE ' + QUOTENAME(db.name)+ ';
 IF NOT EXISTS (SELECT TOP 1 1 FROM sys.filegroups WHERE [name] = N''SECONDARY'')
 	ALTER DATABASE ' + QUOTENAME(db.name)+ ' ADD FILEGROUP [SECONDARY];
-GO' 
+' 
 FROM	sys.databases db
 		CROSS APPLY (SELECT COUNT(DISTINCT mf.data_space_id)[NumberOfFileGroups] FROM sys.master_files mf WHERE mf.database_id = db.database_id AND mf.[type] = 0)ds
 WHERE	db.database_id > 4
@@ -1066,13 +1055,12 @@ WHERE	db.database_id > 4
 		AND @SecondaryFileGroup = 1
 UNION ALL 
 SELECT	'2 Files Secondary FileGroup' ,
-        db.name ,'USE [master]
-GO
+        db.name ,'USE [master];
 ALTER DATABASE ' + QUOTENAME(db.name)+ ' ADD FILE ( NAME = N''' + REPLACE(f1.[name],'<##>',CONVERT(VARCHAR(3), v.Number)) 
                   + ''', FILENAME = N'''
                   + REPLACE(f1.[FileName],'<##>',CONVERT(VARCHAR(3), v.Number)) + ''' , SIZE = ' + f1.size + ' , FILEGROWTH = '
                   + f1.growth + ' ) TO FILEGROUP [SECONDARY]
-GO'		
+'		
 FROM	sys.databases db
 		INNER JOIN [master]..spt_values v ON v.[Type] = 'P' 
 		CROSS APPLY (SELECT COUNT(1)[NumberOfFiles] FROM sys.master_files mf WHERE mf.database_id = db.database_id AND mf.[type] = 0)fn
@@ -1101,7 +1089,6 @@ UNION ALL
 
 SELECT	'Default Filegroup' ,
         db.name ,'USE ' + QUOTENAME(db.name)+ '
-GO
 IF NOT EXISTS (SELECT TOP 1 1 FROM sys.filegroups WHERE is_default = 1 AND name = N''SECONDARY'') ALTER DATABASE ' + QUOTENAME(db.name)+ ' MODIFY FILEGROUP [SECONDARY] DEFAULT;' 
 FROM	sys.databases db
 		CROSS APPLY (SELECT COUNT(DISTINCT mf.data_space_id)[NumberOfFileGroups] FROM sys.master_files mf WHERE mf.database_id = db.database_id AND mf.[type] = 0)ds
@@ -1111,10 +1098,9 @@ WHERE	db.database_id > 4
 UNION ALL 
 
 SELECT	'Best Practice' ,
-        db.name ,'USE [master]
-GO
+        db.name ,'USE [master];
 ALTER DATABASE ' + QUOTENAME(db.name)+ ' SET RECOVERY SIMPLE WITH NO_WAIT;
-GO' 
+' 
 FROM	sys.databases db
 WHERE	db.database_id = 3
 		AND db.recovery_model = 1
@@ -1125,4 +1111,4 @@ SELECT	Type,
         Script
 FROM	@Scripts;
 DROP TABLE #TraceFlag;
---select * from #SR_reg
+--select * from #SR_reg;
