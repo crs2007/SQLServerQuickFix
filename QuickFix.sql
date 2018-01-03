@@ -21,8 +21,6 @@ SET NOCOUNT ON;
 ---------------------------------------------------------------------
 --					D e c l a r a t i o n 
 ---------------------------------------------------------------------
-DECLARE @SecondFileBP BIT;
-SET @SecondFileBP = 0;
 DECLARE @DB_Exclude TABLE ( DatabaseName sysname );
 IF OBJECT_ID('tempdb..#ExcludeDB') IS NOT NULL DROP TABLE #ExcludeDB;
 CREATE TABLE #ExcludeDB([name] sysname NOT NULL);
@@ -1054,11 +1052,7 @@ FROM	sys.databases db
 		CROSS APPLY (SELECT COUNT(DISTINCT mf.data_space_id)[NumberOfFileGroups] FROM sys.master_files mf WHERE mf.database_id = db.database_id AND mf.[type] = 0)ds
 WHERE	db.database_id > 4
 		AND [ds].[NumberOfFileGroups] = 1
-<<<<<<< HEAD
-		AND @SecondFileBP = 1
-=======
 		AND @SecondaryFileGroup = 1
->>>>>>> origin/master
 UNION ALL 
 SELECT	'2 Files Secondary FileGroup' ,
         db.name ,'USE [master];
@@ -1090,11 +1084,7 @@ FROM	sys.databases db
 WHERE	db.database_id > 4
 		AND v.Number BETWEEN 2 AND 3
 		AND fn.NumberOfFiles = 1
-<<<<<<< HEAD
-		AND @SecondFileBP = 1
-=======
 		AND @SecondaryFileGroup = 1
->>>>>>> origin/master
 UNION ALL 
 
 SELECT	'Default Filegroup' ,
@@ -1104,11 +1094,7 @@ FROM	sys.databases db
 		CROSS APPLY (SELECT COUNT(DISTINCT mf.data_space_id)[NumberOfFileGroups] FROM sys.master_files mf WHERE mf.database_id = db.database_id AND mf.[type] = 0)ds
 WHERE	db.database_id > 4
 		AND [ds].[NumberOfFileGroups] = 1
-<<<<<<< HEAD
-		AND @SecondFileBP = 1
-=======
 		AND @SecondaryFileGroup = 1
->>>>>>> origin/master
 UNION ALL 
 
 SELECT	'Best Practice' ,
