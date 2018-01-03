@@ -15,7 +15,7 @@ LICENSE:
 USE [master];
 GO
 -- install configuration recommendations by John Eisbrener
--- https://dbaeyes.wordpress.com/2011/08/18/hooray-you-finished-installing-sql-server-now-what/
+-- https://dbaeyes.wordpress.com/2011/08/18/hooray-you-finished-installing-sql-server-now-what
 SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
 SET NOCOUNT ON;
 ---------------------------------------------------------------------
@@ -134,19 +134,19 @@ BEGIN
 	OPTION  ( RECOMPILE );
 END
 SET @IsCRMDynamicsON = 0;
-SELECT TOP 1
+SELECT TOP (1)
         @IsCRMDynamicsON = 1
 FROM    sys.server_principals SP
 WHERE   SP.name = 'MSCRMSqlLogin';
 IF @IsCRMDynamicsON = 0
-    SELECT TOP 1
+    SELECT TOP (1)
             @IsCRMDynamicsON = 1
     FROM    @DB_Exclude;
 ---------------------------------------------------------------------
 --							BizTalk
 ---------------------------------------------------------------------
 /*
-Biztalk:https://blogs.msdn.microsoft.com/blogdoezequiel/2009/01/25/sql-best-practices-for-biztalk/
+Biztalk:https://blogs.msdn.microsoft.com/blogdoezequiel/2009/01/25/sql-best-practices-for-biztalk
 Auto create statistics must be disabled
 Auto update statistics must be disabled
 MAXDOP (Max degree of parallelism) must be defined as 1 in both SQL Server 2000 and SQL Server 2005 in the instance in which BizTalkMsgBoxDB database exists
@@ -162,7 +162,7 @@ INSERT  @DB_Exclude
 ---------------------------------------------------------------------
 --							SharePoint
 ---------------------------------------------------------------------
-INSERT  @DB_Exclude EXEC sp_MSforeachdb 'SELECT TOP 1 ''?''[DatabaseName]
+INSERT  @DB_Exclude EXEC sp_MSforeachdb 'SELECT TOP (1) ''?''[DatabaseName]
 FROM   [?].sys.database_principals DP
 WHERE  DP.type = ''R'' AND DP.name IN (''SPDataAccess'',''SPReadOnly'')';
 SET @cmd = N'';
@@ -187,7 +187,7 @@ BEGIN CATCH
 	SET @error = ERROR_MESSAGE();
 	RAISERROR(@error,16,1) WITH NOWAIT;
 END CATCH
-IF EXISTS(SELECT TOP 1 1 FROM #SharePointDB)
+IF EXISTS(SELECT TOP (1) 1 FROM #SharePointDB)
 BEGIN
     INSERT @DB_Exclude SELECT [name] FROM #SharePointDB WHERE [name]  NOT IN (SELECT DatabaseName FROM @DB_Exclude);
 END
@@ -204,7 +204,7 @@ SQL Server Collation Requirements for Team Foundation Server: https://www.visual
 IF DB_ID('Tfs_Configuration') IS NOT NULL
 BEGIN
 	INSERT  @DB_Exclude
-	EXEC sp_MSforeachdb 'SELECT TOP 1 ''?''[DatabaseName]
+	EXEC sp_MSforeachdb 'SELECT TOP (1) ''?''[DatabaseName]
 FROM   [?].sys.database_principals DP
 WHERE  DP.type = ''R'' AND DP.name = ''TfsWarehouseDataReader''';
 
@@ -262,7 +262,7 @@ WHERE  (D.name LIKE ''Search[_]Service[_]Application[_]DB[_]%''
 SELECT	d.name
 FROM	sys.databases d
 		INNER JOIN sys.dm_hadr_availability_replica_states rs ON d.replica_id = rs.replica_id
-WHERE	rs.role != 1;');
+WHERE	rs.role <> 1;');
 
 END;
 
@@ -278,7 +278,7 @@ UNION ALL SELECT ''-t1222'') M
 					from sys.dm_server_registry where registry_key = ''HKLM\Software\Microsoft\Microsoft SQL Server\MSSQL'' + @Ver + ''.'' + @InstanceNames + ''\MSSQLServer\Parameters'' and value_name like ''SQLArg%''
 					and value_name not in (''SQLArg0'',''SQLArg1'',''SQLArg2'')
 					and convert(varchar(20),value_data) like ''-t%'') TF ON CONVERT(VARCHAR(50),TF.value_data) = M.TraceFlag
-CROSS JOIN (select top 1 value_name,replace(value_name,''SQLArg'','''') Num from sys.dm_server_registry where registry_key = ''HKLM\Software\Microsoft\Microsoft SQL Server\MSSQL'' + @Ver + ''.'' + @InstanceNames + ''\MSSQLServer\Parameters'' and value_name like ''SQLArg%'' order by value_name desc) N
+CROSS JOIN (select TOP (1) value_name,replace(value_name,''SQLArg'','''') Num from sys.dm_server_registry where registry_key = ''HKLM\Software\Microsoft\Microsoft SQL Server\MSSQL'' + @Ver + ''.'' + @InstanceNames + ''\MSSQLServer\Parameters'' and value_name like ''SQLArg%'' order by value_name desc) N
 WHERE	TF.value_data IS NULL;';
 
 
@@ -366,7 +366,7 @@ BEGIN
                
 	SELECT  @ver = value
 	FROM    @Tempreg;
-	IF LEN(@ver) > 1 AND EXISTS(SELECT TOP 1 1 FROM @Tempreg)
+	IF LEN(@ver) > 1 AND EXISTS(SELECT TOP (1) 1 FROM @Tempreg)
 		BEGIN
 			SET @ComptabilityLevel = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1)
 				+ SUBSTRING(SUBSTRING(@ver, CHARINDEX('.', @ver) + 1, LEN(@ver)),
@@ -593,7 +593,7 @@ BEGIN
 	OPTION (RECOMPILE);
 END
 INSERT @Scripts
-SELECT TOP 1 'History Purged' [Type] ,
+SELECT TOP (1) 'History Purged' [Type] ,
         'MSDB' [Database Name] ,'USE [msdb];
 BEGIN TRANSACTION
 DECLARE @ReturnCode INT;
@@ -667,7 +667,7 @@ EndSave:
         
 FROM    msdb.dbo.backupset bs
 WHERE	bs.backup_start_date < DATEADD(DAY,-40,GETDATE())
-		AND NOT EXISTS(SELECT TOP 1 1 FROM msdb.dbo.sysjobs j WHERE j.name = 'MP - MSDB History Purged' AND j.enabled = 1)		
+		AND NOT EXISTS(SELECT TOP (1) 1 FROM msdb.dbo.sysjobs j WHERE j.name = 'MP - MSDB History Purged' AND j.enabled = 1)		
 ORDER BY backup_set_id ASC;
 
 
@@ -680,9 +680,9 @@ SELECT  'PAGE VERIFY' [Type] ,
 FROM    sys.databases db
 WHERE   db.state = 0
         AND db.is_read_only = 0
-        AND db.page_verify_option != 2
+        AND db.page_verify_option <> 2
         AND db.database_id > 4
-		AND NOT EXISTS (SELECT TOP 1 1 FROM #ExcludeDB X WHERE X.name = db.name)
+		AND NOT EXISTS (SELECT TOP (1) 1 FROM #ExcludeDB X WHERE X.name = db.name)
 UNION ALL
 SELECT  'File Growth' [Type] ,
         db.name AS database_name ,
@@ -696,7 +696,7 @@ FROM    sys.master_files mf
 WHERE   (is_percent_growth = 1 OR (is_percent_growth = 0 AND mf.growth = 128))
         AND db.state = 0
         AND db.is_read_only = 0
-		AND NOT EXISTS (SELECT TOP 1 1 FROM #ExcludeDB X WHERE X.name = db.name)
+		AND NOT EXISTS (SELECT TOP (1) 1 FROM #ExcludeDB X WHERE X.name = db.name)
 UNION ALL
 SELECT  'AUTO SHRINK' [Type] ,
         db.name ,
@@ -706,7 +706,7 @@ FROM    sys.databases db
 WHERE   db.state = 0
         AND db.is_read_only = 0
         AND is_auto_shrink_on = 1
-		AND NOT EXISTS (SELECT TOP 1 1 FROM #ExcludeDB X WHERE X.name = db.name)
+		AND NOT EXISTS (SELECT TOP (1) 1 FROM #ExcludeDB X WHERE X.name = db.name)
 UNION ALL
 SELECT  'CURSOR_DEFAULT' [Type] ,
         db.name ,
@@ -716,7 +716,7 @@ FROM    sys.databases db
 WHERE   db.state = 0
         AND db.is_read_only = 0
         AND is_local_cursor_default = 0
-		AND NOT EXISTS (SELECT TOP 1 1 FROM #ExcludeDB X WHERE X.name = db.name)
+		AND NOT EXISTS (SELECT TOP (1) 1 FROM #ExcludeDB X WHERE X.name = db.name)
 UNION ALL
 SELECT  'Auto Create Statistics' [Type] ,
         db.name ,
@@ -726,7 +726,7 @@ FROM    sys.databases db
 WHERE   db.state = 0
         AND db.is_read_only = 0
         AND is_auto_create_stats_on = 0
-		AND NOT EXISTS (SELECT TOP 1 1 FROM #ExcludeDB X WHERE X.name = db.name)
+		AND NOT EXISTS (SELECT TOP (1) 1 FROM #ExcludeDB X WHERE X.name = db.name)
         AND db.name NOT IN ( SELECT DatabaseName FROM @DB_Exclude )
 UNION ALL
 SELECT  'Auto Create Statistics' [Type] ,
@@ -737,7 +737,7 @@ FROM    sys.databases db
 WHERE   db.state = 0
         AND db.is_read_only = 0
         AND is_auto_create_stats_on = 1
-		AND NOT EXISTS (SELECT TOP 1 1 FROM #ExcludeDB X WHERE X.name = db.name)
+		AND NOT EXISTS (SELECT TOP (1) 1 FROM #ExcludeDB X WHERE X.name = db.name)
         AND db.name IN ( SELECT DatabaseName
                          FROM   @DB_Exclude )
 UNION ALL
@@ -749,7 +749,7 @@ FROM    sys.databases db
 WHERE   db.state = 0
         AND db.is_read_only = 0
         AND is_auto_update_stats_on = 0
-		AND NOT EXISTS (SELECT TOP 1 1 FROM #ExcludeDB X WHERE X.name = db.name)
+		AND NOT EXISTS (SELECT TOP (1) 1 FROM #ExcludeDB X WHERE X.name = db.name)
         AND db.name NOT IN ( SELECT DatabaseName
                              FROM   @DB_Exclude )
 UNION ALL
@@ -761,7 +761,7 @@ FROM    sys.databases db
 WHERE   db.state = 0
         AND db.is_read_only = 0
         AND is_auto_update_stats_on = 1
-		AND NOT EXISTS (SELECT TOP 1 1 FROM #ExcludeDB X WHERE X.name = db.name)
+		AND NOT EXISTS (SELECT TOP (1) 1 FROM #ExcludeDB X WHERE X.name = db.name)
         AND db.name IN ( SELECT DatabaseName
                          FROM   @DB_Exclude )
 UNION ALL
@@ -778,9 +778,9 @@ SELECT  'Configuration' [Type] ,
         'exec sp_configure ''' + name + ''',' + [OS_RAM] +';
 reconfigure with override'
 FROM    sys.configurations C
-		CROSS APPLY(SELECT TOP 1 CONVERT(VARCHAR(25),Internal_Value * 0.8) [OS_RAM] FROM @MSver S WHERE Name = 'PhysicalMemory')CA
-WHERE   name = 'max server memory (MB)'
-        AND value = 2147483647
+		CROSS APPLY(SELECT TOP (1) CONVERT(VARCHAR(25),Internal_Value * 0.8) [OS_RAM] FROM @MSver S WHERE Name = 'PhysicalMemory')CA
+WHERE   C.name = 'max server memory (MB)'
+        AND C.value = 2147483647
 UNION ALL
 SELECT  'Configuration' [Type] ,
         @@SERVERNAME ,
@@ -820,7 +820,7 @@ SELECT  'Configuration' [Type] ,
 reconfigure with override'
 FROM    sys.configurations
 WHERE   name = 'max degree of parallelism'
-        AND value != 0
+        AND value <> 0
         AND NOT EXISTS ( SELECT DatabaseName
                          FROM   @DB_Exclude )
         AND @IsCRMDynamicsON = 0
@@ -831,7 +831,7 @@ SELECT  'Configuration' [Type] ,
 reconfigure with override'
 FROM    sys.configurations
 WHERE   name = 'max degree of parallelism'
-        AND value != 1
+        AND value <> 1
         AND ( EXISTS ( SELECT   DatabaseName
                        FROM     @DB_Exclude )
               OR @IsCRMDynamicsON = 1
@@ -850,13 +850,13 @@ SELECT  'Jobs' ,
         'EXEC msdb.dbo.sp_update_job @job_id=N'''
         + CONVERT(NVARCHAR(36), job_id) + ''',@owner_login_name=N''sa'''
 FROM    msdb..sysjobs
-WHERE   owner_sid != 0x01
+WHERE   owner_sid <> 0x01
 UNION ALL
 SELECT  'SQL Error Log' ,
         @@SERVERNAME ,
         'USE [master];
 EXEC xp_instance_regwrite N''HKEY_LOCAL_MACHINE'', N''Software\Microsoft\MSSQLServer\MSSQLServer'', N''NumErrorLogs'', REG_DWORD, 30'
-WHERE @IsLinux = 0 AND (EXISTS ( SELECT TOP 1 1 FROM #SR_reg WHERE keyname = 'Number Error Logs' AND CurrentInstance = 1 AND value < 30 ) OR NOT EXISTS ( SELECT TOP 1 1 FROM #SR_reg WHERE keyname = 'Number Error Logs' AND CurrentInstance = 1))
+WHERE @IsLinux = 0 AND (EXISTS ( SELECT TOP (1) 1 FROM #SR_reg WHERE keyname = 'Number Error Logs' AND CurrentInstance = 1 AND value < 30 ) OR NOT EXISTS ( SELECT TOP (1) 1 FROM #SR_reg WHERE keyname = 'Number Error Logs' AND CurrentInstance = 1))
 UNION ALL
 SELECT  'SQL Error Log' ,
         @@SERVERNAME ,
@@ -917,8 +917,8 @@ GOTO EndSave;
 QuitWithRollback:
     IF (@@TRANCOUNT > 0) ROLLBACK TRANSACTION;
 EndSave:'
-WHERE   NOT EXISTS ( SELECT TOP 1 1 FROM msdb.[dbo].[sysjobs] WHERE [name] = N'_Admin_ :: CycleErrorLog' )
-        AND (EXISTS ( SELECT TOP 1 1 FROM #SR_reg WHERE keyname = 'Number Error Logs' AND CurrentInstance = 1 AND value < 30 ) OR NOT EXISTS ( SELECT TOP 1 1 FROM #SR_reg WHERE keyname = 'Number Error Logs' AND CurrentInstance = 1))
+WHERE   NOT EXISTS ( SELECT TOP (1) 1 FROM msdb.[dbo].[sysjobs] WHERE [name] = N'_Admin_ :: CycleErrorLog' )
+        AND (EXISTS ( SELECT TOP (1) 1 FROM #SR_reg WHERE keyname = 'Number Error Logs' AND CurrentInstance = 1 AND value < 30 ) OR NOT EXISTS ( SELECT TOP (1) 1 FROM #SR_reg WHERE keyname = 'Number Error Logs' AND CurrentInstance = 1))
 UNION ALL
 SELECT  'Windows Power Plan' ,
         @@SERVERNAME ,
@@ -932,7 +932,7 @@ BEGIN TRY
 	INSERT @output
 	EXEC master.sys.xp_cmdshell @PowerShell;
 
-	IF EXISTS(SELECT TOP 1 1 FROM @output WHERE line = ''WARNING: Access is denied'')
+	IF EXISTS(SELECT TOP (1) 1 FROM @output WHERE line = ''WARNING: Access is denied'')
 		RAISERROR(''Unable to set power plan to "High Performance"'',16,1);
 END TRY
 BEGIN CATCH
@@ -944,20 +944,20 @@ You can read more -
 	https://support.microsoft.com/en-us/help/2207548/slow-performance-on-windows-server-when-using-the-balanced-power-plan''
 	RAISERROR(@err,16,1);
 END CATCH' Script
-WHERE   EXISTS ( SELECT TOP 1 1
+WHERE   EXISTS ( SELECT TOP (1) 1
                  FROM   #SR_reg
                  WHERE  CurrentInstance = 1
                         AND keyname = 'Power Plan'
-                        AND value != 'High performance' )
+                        AND value <> 'High performance' )
 		AND @IsLinux = 0
 UNION ALL
 SELECT  'Performance' ,
         'tempdb' ,
-        CASE WHEN df.file_guid IS NULL
+        CASE WHEN df.[file_id] IS NULL
              THEN 'USE [master];
 ALTER DATABASE [tempdb] ADD FILE ( NAME = N''tempdev'
                   + CONVERT(VARCHAR(3), Num.n) + ''', FILENAME = N'''
-                  + FileName + ''' , SIZE = ' + maxS.size + ' , FILEGROWTH = '
+                  + f1.FileName + ''' , SIZE = ' + maxS.size + ' , FILEGROWTH = '
                   + f1.growth + ' );
 '          WHEN MakeSameSize.Script IS NOT NULL THEN MakeSameSize.Script
              ELSE NULL
@@ -967,7 +967,7 @@ FROM    (	SELECT	v.number AS [n]
 			WHERE	v.[Type] = 'P' 
 					AND Number BETWEEN 1 AND 32
         ) Num
-        CROSS APPLY ( SELECT TOP 1
+        CROSS APPLY ( SELECT TOP (1)
                                 LEFT(physical_name,
                                      LEN(physical_name) - CHARINDEX(@Divider,
                                                               REVERSE(physical_name),
@@ -998,11 +998,11 @@ FROM    (	SELECT	v.number AS [n]
                                               THEN df.file_id - 1
                                               ELSE 1
                                          END = Num.n
-                                         AND type = 0
-        OUTER APPLY ( SELECT TOP 1
+                                         AND df.type = 0
+        OUTER APPLY ( SELECT TOP (1)
                                 'ALTER DATABASE [tempdb] MODIFY FILE ( NAME = N'''
                                 + df.name + ''', SIZE = ' + maxS.size + ');' Script
-                      WHERE     maxS.OriginalSize != df.size
+                      WHERE     maxS.OriginalSize <> df.size
                     ) MakeSameSize
 WHERE   Num.n <= ( SELECT   CASE WHEN cpu_count >= 8 AND @tempDBDataFiles <= 8 THEN 8
 								 WHEN cpu_count >= 8 AND @tempDBDataFiles > 8 THEN @tempDBDataFiles
@@ -1010,7 +1010,7 @@ WHERE   Num.n <= ( SELECT   CASE WHEN cpu_count >= 8 AND @tempDBDataFiles <= 8 T
                             END
                    FROM     sys.dm_os_sys_info
                  )
-        AND ( df.file_guid IS NULL
+        AND ( df.[file_id] IS NULL
               OR MakeSameSize.Script IS NOT NULL
             )
 UNION ALL
@@ -1019,7 +1019,7 @@ FROM    #dm_server_registry
 UNION ALL
 SELECT  'TraceFlag' ,
         @@SERVERNAME ,
-        Script
+        M.Script
 FROM    ( SELECT    1117 AS [TraceFlag] ,
                     'DBCC TRACEON (1117, -1); ' Script WHERE @MajorVersion < 1300 --SQL Server 2016
           UNION ALL
@@ -1045,7 +1045,7 @@ FROM    @SharePointAG
 UNION ALL 
 SELECT	'Secondary FileGroup' ,
         db.name ,'USE ' + QUOTENAME(db.name)+ ';
-IF NOT EXISTS (SELECT TOP 1 1 FROM sys.filegroups WHERE [name] = N''SECONDARY'')
+IF NOT EXISTS (SELECT TOP (1) 1 FROM sys.filegroups WHERE [name] = N''SECONDARY'')
 	ALTER DATABASE ' + QUOTENAME(db.name)+ ' ADD FILEGROUP [SECONDARY];
 ' 
 FROM	sys.databases db
@@ -1064,7 +1064,7 @@ ALTER DATABASE ' + QUOTENAME(db.name)+ ' ADD FILE ( NAME = N''' + REPLACE(f1.[na
 FROM	sys.databases db
 		INNER JOIN [master]..spt_values v ON v.[Type] = 'P' 
 		CROSS APPLY (SELECT COUNT(1)[NumberOfFiles] FROM sys.master_files mf WHERE mf.database_id = db.database_id AND mf.[type] = 0)fn
-		CROSS APPLY ( SELECT TOP 1
+		CROSS APPLY ( SELECT TOP (1)
                                 LEFT(physical_name,
                                      LEN(physical_name) - CHARINDEX('\',
                                                               REVERSE(physical_name),
@@ -1089,7 +1089,7 @@ UNION ALL
 
 SELECT	'Default Filegroup' ,
         db.name ,'USE ' + QUOTENAME(db.name)+ '
-IF NOT EXISTS (SELECT TOP 1 1 FROM sys.filegroups WHERE is_default = 1 AND name = N''SECONDARY'') ALTER DATABASE ' + QUOTENAME(db.name)+ ' MODIFY FILEGROUP [SECONDARY] DEFAULT;' 
+IF NOT EXISTS (SELECT TOP (1) 1 FROM sys.filegroups WHERE is_default = 1 AND name = N''SECONDARY'') ALTER DATABASE ' + QUOTENAME(db.name)+ ' MODIFY FILEGROUP [SECONDARY] DEFAULT;' 
 FROM	sys.databases db
 		CROSS APPLY (SELECT COUNT(DISTINCT mf.data_space_id)[NumberOfFileGroups] FROM sys.master_files mf WHERE mf.database_id = db.database_id AND mf.[type] = 0)ds
 WHERE	db.database_id > 4
