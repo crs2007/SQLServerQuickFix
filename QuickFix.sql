@@ -15,24 +15,34 @@ LICENSE:
 USE [master];
 GO
 -- install configuration recommendations by John Eisbrener
---https://dbaeyes.wordpress.com/2011/08/18/hooray-you-finished-installing-sql-server-now-what/
+-- https://dbaeyes.wordpress.com/2011/08/18/hooray-you-finished-installing-sql-server-now-what/
 SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
 SET NOCOUNT ON;
-/*
-Biztalk:https://blogs.msdn.microsoft.com/blogdoezequiel/2009/01/25/sql-best-practices-for-biztalk/
-Auto create statistics must be disabled
-Auto update statistics must be disabled
-MAXDOP (Max degree of parallelism) must be defined as 1 in both SQL Server 2000 and SQL Server 2005 in the instance in which BizTalkMsgBoxDB database exists
-*/
 ---------------------------------------------------------------------
---					D e c l a r a t  i o n 
+--					D e c l a r a t i o n 
 ---------------------------------------------------------------------
 DECLARE @SecondFileBP BIT;
 SET @SecondFileBP = 0;
 DECLARE @DB_Exclude TABLE ( DatabaseName sysname );
 IF OBJECT_ID('tempdb..#ExcludeDB') IS NOT NULL DROP TABLE #ExcludeDB;
-CREATE TABLE #ExcludeDB(name sysname NOT NULL);
+CREATE TABLE #ExcludeDB([name] sysname NOT NULL);
+IF OBJECT_ID('tempdb..#SharePointDB') IS NOT NULL DROP TABLE #SharePointDB;
+CREATE TABLE #SharePointDB([name] sysname NOT NULL);
+DECLARE @SecondaryFileGroup BIT;
+SET @SecondaryFileGroup = 0
+DECLARE	@IsLinux BIT;
+DECLARE @Divider CHAR(1);
+SET @Divider = '\';
+SET @IsLinux = 0;
+IF OBJECT_ID('sys.dm_os_host_info') IS NOT NULL
+BEGIN
+	SELECT	@IsLinux = 1
+	FROM	sys.dm_os_host_info
+	WHERE	host_platform = 'Linux'
+	IF @IsLinux = 1 SET @Divider = '/';
+END
 DECLARE @IsCRMDynamicsON BIT;
+DECLARE @error NVARCHAR(2048);
 DECLARE @cmd NVARCHAR(MAX);
 DECLARE @SharePointAG TABLE
     (
@@ -84,6 +94,8 @@ DECLARE @Tempreg TABLE
       keyname CHAR(200) ,
       value VARCHAR(1000)
     );
+DECLARE @MSver TABLE (ID INT,  Name  sysname, Internal_Value INT, Value nvarchar(512))
+INSERT @MSver EXEC master.dbo.xp_msver
 IF OBJECT_ID('tempdb..#SR_reg') IS NOT NULL
     DROP TABLE #SR_reg;
 CREATE TABLE #SR_reg
@@ -102,15 +114,27 @@ DECLARE @keyi VARCHAR(8000);
              
 DECLARE @SQLServiceNamei VARCHAR(8000);
 DECLARE @AgentServiceNamei VARCHAR(8000);
-
+DECLARE @tempDBDataFiles INT;
+SELECT	@tempDBDataFiles = COUNT(1)
+FROM	master.sys.master_files
+WHERE	database_id = 2
+		AND type = 0
+OPTION(RECOMPILE);
 ---------------------------------------------------------------------
 --							CRM Dynamics
 ---------------------------------------------------------------------
-INSERT  @DB_Exclude
-        SELECT  D.name
-        FROM    sys.databases D
-        WHERE   D.name IN ( 'MSCRM_CONFIG', 'OrganizationName_MSCRM' );
-
+IF DB_ID('MSCRM_CONFIG') IS NOT NULL
+BEGIN
+	INSERT @DB_Exclude
+	SELECT D.name
+	FROM   sys.databases D
+	WHERE  D.name = 'MSCRM_CONFIG'
+			OR D.name LIKE '%[_]MSCRM'
+	UNION
+	SELECT [DatabaseName] COLLATE DATABASE_DEFAULT
+	FROM   [MSCRM_CONFIG].[dbo].[Organization]
+	OPTION  ( RECOMPILE );
+END
 SET @IsCRMDynamicsON = 0;
 SELECT TOP 1
         @IsCRMDynamicsON = 1
@@ -123,6 +147,12 @@ IF @IsCRMDynamicsON = 0
 ---------------------------------------------------------------------
 --							BizTalk
 ---------------------------------------------------------------------
+/*
+Biztalk:https://blogs.msdn.microsoft.com/blogdoezequiel/2009/01/25/sql-best-practices-for-biztalk/
+Auto create statistics must be disabled
+Auto update statistics must be disabled
+MAXDOP (Max degree of parallelism) must be defined as 1 in both SQL Server 2000 and SQL Server 2005 in the instance in which BizTalkMsgBoxDB database exists
+*/
 INSERT  @DB_Exclude
         SELECT  D.name
         FROM    sys.databases D
@@ -134,10 +164,66 @@ INSERT  @DB_Exclude
 ---------------------------------------------------------------------
 --							SharePoint
 ---------------------------------------------------------------------
-INSERT  @DB_Exclude
-        EXEC sp_MSforeachdb 'SELECT TOP 1 ''[?]''[DatabaseName]
+INSERT  @DB_Exclude EXEC sp_MSforeachdb 'SELECT TOP 1 ''?''[DatabaseName]
 FROM   [?].sys.database_principals DP
 WHERE  DP.type = ''R'' AND DP.name IN (''SPDataAccess'',''SPReadOnly'')';
+SET @cmd = N'';
+SELECT	@cmd +='
+BEGIN TRY
+	INSERT #SharePointDB
+	SELECT DISTINCT [Name]
+	FROM    ' + QUOTENAME([name]) + '.[dbo].[Objects]
+	WHERE   [Name] IN ( SELECT  name COLLATE DATABASE_DEFAULT FROM sys.databases ) AND [Status] = 0
+	UNION	SELECT ''' + [name] + ''' [SharePointConfig];
+END TRY
+BEGIN CATCH
+END CATCH'
+FROM	sys.databases
+WHERE	[name] LIKE '%[_]Config';
+
+BEGIN TRY
+	EXEC master.sys.sp_executesql @cmd;
+END TRY
+BEGIN CATCH
+	PRINT @cmd;
+	SET @error = ERROR_MESSAGE();
+	RAISERROR(@error,16,1) WITH NOWAIT;
+END CATCH
+IF EXISTS(SELECT TOP 1 1 FROM #SharePointDB)
+BEGIN
+    INSERT @DB_Exclude SELECT [name] FROM #SharePointDB WHERE [name]  NOT IN (SELECT DatabaseName FROM @DB_Exclude);
+END
+DROP TABLE #SharePointDB;
+---------------------------------------------------------------------
+--					Team Foundation Server (TFS)
+---------------------------------------------------------------------
+/*
+TFS DB: https://www.visualstudio.com/en-us/docs/setup-admin/tfs/architecture/sql-server-databases
+Understand TFS databases, deployment topologies, and backup: https://www.visualstudio.com/he-il/docs/setup-admin/tfs/admin/backup/backup-db-architecture
+Manually install SQL Server for Team Foundation Server: https://www.visualstudio.com/en-us/docs/setup-admin/tfs/install/sql-server/install-sql-server
+SQL Server Collation Requirements for Team Foundation Server: https://www.visualstudio.com/en-us/docs/setup-admin/tfs/install/sql-server/collation-requirements
+*/
+IF DB_ID('Tfs_Configuration') IS NOT NULL
+BEGIN
+	INSERT  @DB_Exclude
+	EXEC sp_MSforeachdb 'SELECT TOP 1 ''?''[DatabaseName]
+FROM   [?].sys.database_principals DP
+WHERE  DP.type = ''R'' AND DP.name = ''TfsWarehouseDataReader''';
+
+	INSERT  @DB_Exclude
+	SELECT	CR.[DisplayName]
+	FROM	[Tfs_Configuration].[dbo].[tbl_CatalogResource] CR
+			INNER JOIN [Tfs_Configuration].[dbo].[tbl_CatalogResourceType] RC ON RC.Identifier = CR.ResourceType
+	WHERE	RC.DisplayName = 'Team Foundation Project Collection Database'
+			AND CR.[DisplayName] NOT IN(SELECT DatabaseName FROM @DB_Exclude)
+	UNION	SELECT name FROM sys.databases WHERE [name] IN ('TFS_Configuration','TFS_Warehouse','TFS_Analysis') AND state = 0 AND name NOT IN(SELECT DatabaseName FROM @DB_Exclude)
+END
+---------------------------------------------------------------------
+INSERT	#ExcludeDB
+SELECT	name
+FROM	sys.databases
+WHERE	DATABASEPROPERTYEX(name, 'Updateability') = 'READ_ONLY'
+OPTION(RECOMPILE);
 
 INSERT  INTO #checkversion
         ( version
@@ -146,7 +232,8 @@ INSERT  INTO #checkversion
 SELECT  @MajorVersion = major + CASE WHEN minor = 0 THEN '00'
                                      ELSE minor
                                 END
-FROM    #checkversion;
+FROM    #checkversion
+OPTION(RECOMPILE);
 
 IF @MajorVersion > 1050 AND SERVERPROPERTY('IsHadrEnabled') = 1--2012
 BEGIN
@@ -182,11 +269,12 @@ WHERE	rs.role != 1;');
 END;
 
 SET @cmd = 'INSERT #dm_server_registry
-SELECT	''TraceFlag'' , @@SERVERNAME,''USE [master]
-GO
-EXEC xp_instance_regwrite N''''HKEY_LOCAL_MACHINE'''', N''''SOFTWARE\\Microsoft\Microsoft SQL Server\\MSSQL'' + @Ver + ''.'' + @InstanceNames + ''\\MSSQLServer\\Parameters'''', N''''SQLArg'' +CONVERT(VARCHAR(10),N.Num + ROW_NUMBER() OVER (ORDER BY N.Num)) + '''''', REG_SZ, '''''' + M.TraceFlag + '''''''' Script
+SELECT	''TraceFlag'' , @@SERVERNAME,''USE [master];
+EXEC xp_instance_regwrite N''''HKEY_LOCAL_MACHINE'''', N''''SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL'' + @Ver + ''.'' + @InstanceNames + ''\MSSQLServer\Parameters'''', N''''SQLArg'' +CONVERT(VARCHAR(10),N.Num + ROW_NUMBER() OVER (ORDER BY N.Num)) + '''''', REG_SZ, '''''' + M.TraceFlag + '''''''' Script
 FROM	(SELECT ''-t1117'' TraceFlag
-UNION ALL SELECT ''-t1118'') M
+UNION ALL SELECT ''-t1118''
+UNION ALL SELECT ''-t3226''
+UNION ALL SELECT ''-t1222'') M
 		LEFT JOIN (
 					select *
 					from sys.dm_server_registry where registry_key = ''HKLM\Software\Microsoft\Microsoft SQL Server\MSSQL'' + @Ver + ''.'' + @InstanceNames + ''\MSSQLServer\Parameters'' and value_name like ''SQLArg%''
@@ -199,35 +287,35 @@ WHERE	TF.value_data IS NULL;';
 INSERT  #TraceFlag EXEC ('DBCC TRACESTATUS(-1)'); 
 
 SET @InstanceNames = @@servicename;
-  --BEGIN
---Build Sql Server's full service name
-SET @SQLServiceNamei = CASE WHEN @InstanceNames = 'MSSQLSERVER'
-                            THEN 'MSSQLSERVER'
-                            ELSE 'MSSQL$' + @InstanceNames
-                       END; 
+IF @IsLinux = 0
+BEGIN
+	--Build Sql Server's full service name
+	SET @SQLServiceNamei = CASE WHEN @InstanceNames = 'MSSQLSERVER'
+								THEN 'MSSQLSERVER'
+								ELSE 'MSSQL$' + @InstanceNames
+						   END; 
 
-SET @keyi = 'SYSTEM\CurrentControlSet\Services\' + @SQLServiceNamei;
-DELETE  FROM @reg;  
---MSSQLSERVER Service Account
-INSERT  INTO @reg
-        EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'ObjectName';
-UPDATE  @reg
-SET     keyname = @SQLServiceNamei; 
-INSERT  #SR_reg
-        ( Service ,
-          InstanceNames ,
-          keyname ,
-          value
-        )
-        SELECT  'SQL Server Engine' ,
-                @InstanceNames ,
-                'Account Name' ,
-                value
-        FROM    @reg;
+	SET @keyi = 'SYSTEM\CurrentControlSet\Services\' + @SQLServiceNamei;
+	DELETE  FROM @reg;  
+	--MSSQLSERVER Service Account
+	INSERT  @reg EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'ObjectName';
+	UPDATE  @reg
+	SET     keyname = @SQLServiceNamei; 
+	INSERT  #SR_reg
+			( Service ,
+			  InstanceNames ,
+			  keyname ,
+			  value
+			)
+			SELECT  'SQL Server Engine' ,
+					@InstanceNames ,
+					'Account Name' ,
+					value
+			FROM    @reg;
              
              
-             -------------------------------------------------------------------------------
-IF @InstanceNames = @@SERVICENAME
+				 -------------------------------------------------------------------------------
+	IF @InstanceNames = @@SERVICENAME
     BEGIN
         SET @ver = CAST(SERVERPROPERTY('ProductVersion') AS NVARCHAR);
         IF ( SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1) = '10' )
@@ -253,243 +341,340 @@ IF @InstanceNames = @@SERVICENAME
    
         ELSE
             SELECT  @ver = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1);
+			
         IF @ver > '9'
             BEGIN
-                EXEC sp_executesql @cmd;
+				BEGIN TRY
+					EXEC master.sys.sp_executesql @cmd;
+				END TRY
+				BEGIN CATCH
+					PRINT @cmd;
+					SET @error = ERROR_MESSAGE();
+					RAISERROR(@error,16,1) WITH NOWAIT;
+				END CATCH
             END;
     END;
                     
-SET @keyi = CASE WHEN @InstanceNames = 'MSSQLSERVER'
-                 THEN 'SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL' + @ver
-                      + '.' + @InstanceNames + '\MSSQLServer\CurrentVersion'
-                 ELSE 'SOFTWARE\Wow6432Node\Microsoft\Microsoft SQL Server\'
-                      + @InstanceNames + '\MSSQLServer\CurrentVersion'
-            END; 
-DELETE  FROM @reg;
-DELETE  FROM @Tempreg; 
-INSERT  INTO @Tempreg
-        EXECUTE xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'CurrentVersion';
-                    
-SELECT  @ver = value
-FROM    @Tempreg;
-IF LEN(@ver) > 1
-    BEGIN
-        SET @ComptabilityLevel = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1)
-            + SUBSTRING(SUBSTRING(@ver, CHARINDEX('.', @ver) + 1, LEN(@ver)),
-                        1, 1);
+	SET @keyi = CASE WHEN @InstanceNames = 'MSSQLSERVER'
+					 THEN 'SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL' + @ver
+						  + '.' + @InstanceNames + '\MSSQLServer\CurrentVersion'
+					 ELSE 'SOFTWARE\Wow6432Node\Microsoft\Microsoft SQL Server\'
+						  + @InstanceNames + '\MSSQLServer\CurrentVersion'
+				END; 
+	DELETE  FROM @reg;
+	DELETE  FROM @Tempreg; 
+	INSERT  INTO @Tempreg
+			EXECUTE xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'CurrentVersion';
+               
+	SELECT  @ver = value
+	FROM    @Tempreg;
+	IF LEN(@ver) > 1 AND EXISTS(SELECT TOP 1 1 FROM @Tempreg)
+		BEGIN
+			SET @ComptabilityLevel = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1)
+				+ SUBSTRING(SUBSTRING(@ver, CHARINDEX('.', @ver) + 1, LEN(@ver)),
+							1, 1);
 			
-        IF ( SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1) = '10' )
-            BEGIN
-                IF SUBSTRING(SUBSTRING(@ver, CHARINDEX('.', @ver) + 1,
-                                       LEN(@ver)), 1,
-                             CHARINDEX('.',
-                                       SUBSTRING(@ver,
-                                                 CHARINDEX('.', @ver) + 1,
-                                                 LEN(@ver))) - 1) = '50'
-                    SELECT  @ver = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1)
-                            + '_' + SUBSTRING(SUBSTRING(@ver,
-                                                        CHARINDEX('.', @ver)
-                                                        + 1, LEN(@ver)), 1,
-                                              CHARINDEX('.',
-                                                        SUBSTRING(@ver,
-                                                              CHARINDEX('.',
-                                                              @ver) + 1,
-                                                              LEN(@ver))) - 1);
-                ELSE
-                    SELECT  @ver = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1);
-            END;
+			IF ( SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1) = '10' )
+				BEGIN
+					IF SUBSTRING(SUBSTRING(@ver, CHARINDEX('.', @ver) + 1,
+										   LEN(@ver)), 1,
+								 CHARINDEX('.',
+										   SUBSTRING(@ver,
+													 CHARINDEX('.', @ver) + 1,
+													 LEN(@ver))) - 1) = '50'
+						SELECT  @ver = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1)
+								+ '_' + SUBSTRING(SUBSTRING(@ver,
+															CHARINDEX('.', @ver)
+															+ 1, LEN(@ver)), 1,
+												  CHARINDEX('.',
+															SUBSTRING(@ver,
+																  CHARINDEX('.',
+																  @ver) + 1,
+																  LEN(@ver))) - 1);
+					ELSE
+						SELECT  @ver = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1);
+				END;
    
-        ELSE
-            SELECT  @ver = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1);
-    END;
-ELSE
-    SET @ComptabilityLevel = @ver + '0';
-----------------------------------------------------------------------------------------------------------------------------------
-SET @key = 'SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL' + @ver + '.'
-    + @InstanceNames + '\Setup';
-INSERT  @reg
-        EXECUTE xp_regread 'HKEY_LOCAL_MACHINE', @key, 'PatchLevel';
+			ELSE
+				SELECT  @ver = SUBSTRING(@ver, 1, CHARINDEX('.', @ver) - 1);
+		END;
+	ELSE
+		SET @ComptabilityLevel = @ver + '0';
+	----------------------------------------------------------------------------------------------------------------------------------
+	SET @key = 'SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL' + @ver + '.'
+		+ @InstanceNames + '\Setup';
+	INSERT  @reg
+			EXECUTE xp_regread 'HKEY_LOCAL_MACHINE', @key, 'PatchLevel';
                     
-INSERT  #SR_reg
-        ( Service ,
-          InstanceNames ,
-          keyname ,
-          value
-        )
-        SELECT  'SQL Server Engine Version' ,
-                @InstanceNames ,
-                'Last Version Installed' ,
-                value
-        FROM    @reg;
-----------------------------------------------------------------------------------------------------------------------------------
-DELETE  FROM @reg;
-SET @keyi = 'SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL' + @ver + '.'
-    + @InstanceNames + '\Setup';
-INSERT  INTO @reg
-        EXECUTE xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'Edition';
-INSERT  #SR_reg
-        ( Service ,
-          InstanceNames ,
-          keyname ,
-          value
-        )
-        SELECT  'SQL Server Engine Edition' ,
-                @InstanceNames ,
-                'Edition Installed' ,
-                value
-        FROM    @reg;
-----------------------------------------------------------------------------------------------------------------------------------
-             --Error Log file
-DELETE  FROM @reg;
-SET @keyi = N'Software\Microsoft\Microsoft SQL Server\MSSQL' + @ver + '.'
-    + @InstanceNames + '\MSSQLServer';
-INSERT  INTO @reg
-        EXECUTE xp_regread N'HKEY_LOCAL_MACHINE', @keyi, N'NumErrorLogs';
-INSERT  #SR_reg
-        ( Service ,
-          InstanceNames ,
-          keyname ,
-          value
-        )
-        SELECT  'SQL Server Number of Error Log files' ,
-                @InstanceNames ,
-                'Number Error Logs' ,
-                value
-        FROM    @reg;   
-----------------------------------------------------------------------------------------------------------------------------------
-DELETE  FROM @reg;
-SET @key = 'SOFTWARE\Microsoft\Microsoft SQL Server\' + @ComptabilityLevel;
-INSERT  INTO @reg
-        EXECUTE xp_regread 'HKEY_LOCAL_MACHINE', @key, 'CustomerFeedback';
-INSERT  #SR_reg
-        ( Service ,
-          InstanceNames ,
-          keyname ,
-          value
-        )
-        SELECT  'SQL Server Customer Feedback' ,
-                @InstanceNames ,
-                'Customer Feedback Enabled' ,
-                value
-        FROM    @reg;
-DELETE  FROM @reg;
-INSERT  INTO @reg
-        EXECUTE xp_regread 'HKEY_LOCAL_MACHINE', @key, 'EnableErrorReporting';
-INSERT  #SR_reg
-        ( Service ,
-          InstanceNames ,
-          keyname ,
-          value
-        )
-        SELECT  'SQL Server Error Reporting' ,
-                @InstanceNames ,
-                'Error Reporting Enabled' ,
-                value
-        FROM    @reg;
-----------------------------------------------------------------------------------------------------------------------------------
-        --SQLSERVERAGENT Service Account
-SET @AgentServiceNamei = CASE WHEN @InstanceNames = 'MSSQLSERVER'
-                              THEN 'SQLSERVERAGENT'
-                              ELSE 'SQLAgent$' + @InstanceNames
-                         END; 
-SET @keyi = 'SYSTEM\CurrentControlSet\Services\' + @AgentServiceNamei; 
+	INSERT  #SR_reg
+			( Service ,
+			  InstanceNames ,
+			  keyname ,
+			  value
+			)
+			SELECT  'SQL Server Engine Version' ,
+					@InstanceNames ,
+					'Last Version Installed' ,
+					value
+			FROM    @reg;
+	----------------------------------------------------------------------------------------------------------------------------------
+	DELETE  FROM @reg;
+	SET @keyi = 'SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL' + @ver + '.'
+		+ @InstanceNames + '\Setup';
+	INSERT  INTO @reg
+			EXECUTE xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'Edition';
+	INSERT  #SR_reg
+			( Service ,
+			  InstanceNames ,
+			  keyname ,
+			  value
+			)
+			SELECT  'SQL Server Engine Edition' ,
+					@InstanceNames ,
+					'Edition Installed' ,
+					value
+			FROM    @reg;
+	----------------------------------------------------------------------------------------------------------------------------------
+	--Error Log file
+	DELETE  FROM @reg;
+	SET @keyi = N'Software\Microsoft\Microsoft SQL Server\MSSQL' + @ver + '.' + @InstanceNames + '\MSSQLServer';
+	INSERT  INTO @reg EXECUTE xp_regread N'HKEY_LOCAL_MACHINE', @keyi, N'NumErrorLogs';
+	INSERT  #SR_reg
+			( Service ,
+			  InstanceNames ,
+			  keyname ,
+			  value
+			)
+			SELECT  'SQL Server Number of Error Log files' ,
+					@InstanceNames ,
+					'Number Error Logs' ,
+					value
+			FROM    @reg;   
+	----------------------------------------------------------------------------------------------------------------------------------
+	DELETE  FROM @reg;
+	SET @key = 'SOFTWARE\Microsoft\Microsoft SQL Server\' + @ComptabilityLevel;
+	INSERT  INTO @reg
+			EXECUTE xp_regread 'HKEY_LOCAL_MACHINE', @key, 'CustomerFeedback';
+	INSERT  #SR_reg
+			( Service ,
+			  InstanceNames ,
+			  keyname ,
+			  value
+			)
+			SELECT  'SQL Server Customer Feedback' ,
+					@InstanceNames ,
+					'Customer Feedback Enabled' ,
+					value
+			FROM    @reg;
+	DELETE  FROM @reg;
+	INSERT  INTO @reg
+			EXECUTE xp_regread 'HKEY_LOCAL_MACHINE', @key, 'EnableErrorReporting';
+	INSERT  #SR_reg
+			( Service ,
+			  InstanceNames ,
+			  keyname ,
+			  value
+			)
+			SELECT  'SQL Server Error Reporting' ,
+					@InstanceNames ,
+					'Error Reporting Enabled' ,
+					value
+			FROM    @reg;
+	----------------------------------------------------------------------------------------------------------------------------------
+			--SQLSERVERAGENT Service Account
+	SET @AgentServiceNamei = CASE WHEN @InstanceNames = 'MSSQLSERVER'
+								  THEN 'SQLSERVERAGENT'
+								  ELSE 'SQLAgent$' + @InstanceNames
+							 END; 
+	SET @keyi = 'SYSTEM\CurrentControlSet\Services\' + @AgentServiceNamei; 
              
-DELETE  FROM @reg;  
-INSERT  INTO @reg
-        EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'ObjectName';
+	DELETE  FROM @reg;  
+	INSERT  INTO @reg
+			EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'ObjectName';
        
-UPDATE  @reg
-SET     keyname = @AgentServiceNamei
-WHERE   keyname = 'ObjectName';
-INSERT  #SR_reg
-        ( Service ,
-          InstanceNames ,
-          keyname ,
-          value
-        )
-        SELECT  'SQL Server Agent' ,
-                @InstanceNames ,
-                'Account Name' ,
-                value
-        FROM    @reg;
--------------------------
-        --Windows Power Plan
-SET @keyi = 'SYSTEM\ControlSet001\Control\Power\User\PowerSchemes';
---'SOFTWARE\Microsoft\Windows\CurrentVersion\explorer\ControlPanel\NameSpace\{025A5937-A6BE-4686-A844-36FE4BEC8B6D}'; 
+	UPDATE  @reg
+	SET     keyname = @AgentServiceNamei
+	WHERE   keyname = 'ObjectName';
+	INSERT  #SR_reg
+			( Service ,
+			  InstanceNames ,
+			  keyname ,
+			  value
+			)
+			SELECT  'SQL Server Agent' ,
+					@InstanceNames ,
+					'Account Name' ,
+					value
+			FROM    @reg;
+	-------------------------
+			--Windows Power Plan
+	SET @keyi = 'SYSTEM\ControlSet001\Control\Power\User\PowerSchemes';
+	--'SOFTWARE\Microsoft\Windows\CurrentVersion\explorer\ControlPanel\NameSpace\{025A5937-A6BE-4686-A844-36FE4BEC8B6D}'; 
              
-DELETE  FROM @reg;  
-INSERT  INTO @reg
-        EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi,
-            'ActivePowerScheme';
---'PreferredPlan';
+	DELETE  FROM @reg;  
+	INSERT  INTO @reg
+			EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi,
+				'ActivePowerScheme';
+	--'PreferredPlan';
        
-INSERT  #SR_reg
-        ( Service ,
-          InstanceNames ,
-          keyname ,
-          value
-        )
-        SELECT  'Windows Power Plan' ,
-                @InstanceNames ,
-                'Power Plan' ,
-                CASE CONVERT(VARCHAR(50), value)
-                  WHEN '381b4222-f694-41f0-9685-ff5bb260df2e' THEN 'Balanced'
-                  WHEN 'a1841308-3541-4fab-bc81-f71556f20b4a'
-                  THEN 'Power saver'
-                  WHEN '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
-                  THEN 'High performance'
-                  ELSE NULL
-                END
-        FROM    @reg;
--------------------------
-DELETE  FROM @reg;  
+	INSERT  #SR_reg
+			( Service ,
+			  InstanceNames ,
+			  keyname ,
+			  value
+			)
+			SELECT  'Windows Power Plan' ,
+					@InstanceNames ,
+					'Power Plan' ,
+					CASE CONVERT(VARCHAR(50), value)
+					  WHEN '381b4222-f694-41f0-9685-ff5bb260df2e' THEN 'Balanced'
+					  WHEN 'a1841308-3541-4fab-bc81-f71556f20b4a'
+					  THEN 'Power saver'
+					  WHEN '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
+					  THEN 'High performance'
+					  ELSE 'User Preferance'
+					END
+			FROM    @reg;
+	-------------------------
+	DELETE  FROM @reg;  
         
-SET @keyi = CASE WHEN @InstanceNames = 'MSSQLSERVER'
-                 THEN 'SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL' + @ver
-                      + '.' + @InstanceNames + '\MSSQLServer\Parameters'
-                 ELSE 'SOFTWARE\Wow6432Node\Microsoft\Microsoft SQL Server\'
-                      + @InstanceNames + '\MSSQLServer\Parameters'
-            END; 
-DELETE  FROM @reg;  
-INSERT  INTO @reg
-        EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs3';
-INSERT  INTO @reg
-        EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs4';
-INSERT  INTO @reg
-        EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs5';
-INSERT  INTO @reg
-        EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs6';
-INSERT  INTO @reg
-        EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs7';
-INSERT  INTO @reg
-        EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs8';
-INSERT  INTO @reg
-        EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs9';
-INSERT  INTO @reg
-        EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs10';
-INSERT  INTO @reg
-        EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs11';
-INSERT  INTO @reg
-        EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs12';
-INSERT  INTO @reg
-        EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs13';
+	SET @keyi = CASE WHEN @InstanceNames = 'MSSQLSERVER'
+					 THEN 'SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL' + @ver
+						  + '.' + @InstanceNames + '\MSSQLServer\Parameters'
+					 ELSE 'SOFTWARE\Wow6432Node\Microsoft\Microsoft SQL Server\'
+						  + @InstanceNames + '\MSSQLServer\Parameters'
+				END; 
+	DELETE  FROM @reg;  
+	INSERT  INTO @reg
+			EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs3';
+	INSERT  INTO @reg
+			EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs4';
+	INSERT  INTO @reg
+			EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs5';
+	INSERT  INTO @reg
+			EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs6';
+	INSERT  INTO @reg
+			EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs7';
+	INSERT  INTO @reg
+			EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs8';
+	INSERT  INTO @reg
+			EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs9';
+	INSERT  INTO @reg
+			EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs10';
+	INSERT  INTO @reg
+			EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs11';
+	INSERT  INTO @reg
+			EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs12';
+	INSERT  INTO @reg
+			EXEC master..xp_regread 'HKEY_LOCAL_MACHINE', @keyi, 'SQLArgs13';
        
-UPDATE  @reg
-SET     keyname = @InstanceNames
-WHERE   keyname LIKE 'SQLArgs%';
-             
-INSERT  #SR_reg
-        ( Service ,
-          InstanceNames ,
-          keyname ,
-          value
-        )
-        SELECT  'SQL Server Trace Flage' ,
-                @InstanceNames ,
-                'Trace Flage' ,
-                value
-        FROM    @reg;
-  
+	UPDATE  @reg
+	SET     keyname = @InstanceNames
+	WHERE   keyname LIKE 'SQLArgs%';
+         
+	INSERT  #SR_reg
+			( Service ,
+			  InstanceNames ,
+			  keyname ,
+			  value
+			)
+			SELECT  'SQL Server Trace Flage' ,
+					@InstanceNames ,
+					'Trace Flage' ,
+					value
+			FROM    @reg;
+END
+DECLARE @Scripts TABLE([Type] sysname NOT NULL,[Database Name] sysname NOT NULL,[Script] NVARCHAR(MAX) NOT NULL);
+DECLARE @Operator sysname;
+SET @Operator = '<Your Operator>';
+IF (SELECT	COUNT(1)
+FROM	msdb.dbo.sysoperators) = 1
+BEGIN
+    SELECT	@Operator = name
+    FROM	msdb.dbo.sysoperators
+	OPTION (RECOMPILE);
+END
+INSERT @Scripts
+SELECT TOP 1 'History Purged' [Type] ,
+        'MSDB' [Database Name] ,'USE [msdb];
+BEGIN TRANSACTION
+DECLARE @ReturnCode INT;
+SELECT @ReturnCode = 0;
+IF NOT EXISTS (SELECT name FROM msdb.dbo.syscategories WHERE name=N''DBA'' AND category_class=1)
+BEGIN
+EXEC @ReturnCode = msdb.dbo.sp_add_category @class=N''JOB'', @type=N''LOCAL'', @name=N''DBA'';
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback;
+
+END
+
+DECLARE @jobId BINARY(16);
+EXEC @ReturnCode =  msdb.dbo.sp_add_job @job_name=N''MP - MSDB History Purged'', 
+		@enabled=1, 
+		@notify_level_eventlog=0, 
+		@notify_level_email=2, 
+		@notify_level_netsend=0, 
+		@notify_level_page=0, 
+		@delete_level=0, 
+		@description=N''This job create by running script from https://github.com/crs2007/SQLServerQuickFix/blob/master/QuickFix.sql'', 
+		@category_name=N''DBA'', 
+		@owner_login_name=N''sa'', 
+		@notify_email_operator_name=N''' + @Operator +''', @job_id = @jobId OUTPUT;
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback;
+EXEC @ReturnCode = msdb.dbo.sp_add_jobstep @job_id=@jobId, @step_name=N''MSDB Purged'', 
+		@step_id=1, 
+		@cmdexec_success_code=0, 
+		@on_success_action=1, 
+		@on_success_step_id=0, 
+		@on_fail_action=2, 
+		@on_fail_step_id=0, 
+		@retry_attempts=0, 
+		@retry_interval=0, 
+		@os_run_priority=0, @subsystem=N''TSQL'', 
+		@command=N''DECLARE @dt datetime; 
+SET @dt = DATEADD(DAY,-14,GETDATE());
+
+EXECUTE  msdb.dbo.sp_delete_backuphistory @dt;
+
+EXECUTE  msdb.dbo.sp_purge_jobhistory  @oldest_date=@dt;
+
+EXECUTE msdb..sp_maintplan_delete_log null,null,@dt;
+'', 
+		@database_name=N''msdb'', 
+		@flags=0
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback;
+EXEC @ReturnCode = msdb.dbo.sp_update_job @job_id = @jobId, @start_step_id = 1;
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback;
+EXEC @ReturnCode = msdb.dbo.sp_add_jobschedule @job_id=@jobId, @name=N''MP - MSDB History Purged'', 
+		@enabled=1, 
+		@freq_type=4, 
+		@freq_interval=1, 
+		@freq_subday_type=1, 
+		@freq_subday_interval=0, 
+		@freq_relative_interval=0, 
+		@freq_recurrence_factor=0, 
+		@active_start_date=20170706, 
+		@active_end_date=99991231, 
+		@active_start_time=0, 
+		@active_end_time=235959, 
+		@schedule_uid=N''ccc2b9ef-a828-4004-ba3f-246ba56ba633'';
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback;
+EXEC @ReturnCode = msdb.dbo.sp_add_jobserver @job_id = @jobId, @server_name = N''(local)'';
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback;
+COMMIT TRANSACTION
+GOTO EndSave;
+QuitWithRollback:
+    IF (@@TRANCOUNT > 0) ROLLBACK TRANSACTION;
+EndSave:
+'
+        
+FROM    msdb.dbo.backupset bs
+WHERE	bs.backup_start_date < DATEADD(DAY,-40,GETDATE())
+		AND NOT EXISTS(SELECT TOP 1 1 FROM msdb.dbo.sysjobs j WHERE j.name = 'MP - MSDB History Purged' AND j.enabled = 1)		
+ORDER BY backup_set_id ASC;
+
+
+
+
 SELECT  'PAGE VERIFY' [Type] ,
         db.name [Database Name] ,
         N'ALTER DATABASE [' + db.name
@@ -544,8 +729,7 @@ WHERE   db.state = 0
         AND db.is_read_only = 0
         AND is_auto_create_stats_on = 0
 		AND NOT EXISTS (SELECT TOP 1 1 FROM #ExcludeDB X WHERE X.name = db.name)
-        AND db.name NOT IN ( SELECT DatabaseName
-                             FROM   @DB_Exclude )
+        AND db.name NOT IN ( SELECT DatabaseName FROM @DB_Exclude )
 UNION ALL
 SELECT  'Auto Create Statistics' [Type] ,
         db.name ,
@@ -586,15 +770,24 @@ UNION ALL
 SELECT  'Configuration' [Type] ,
         @@SERVERNAME ,
         'exec sp_configure ''' + name + ''',1;
-reconfigure'
+reconfigure with override'
 FROM    sys.configurations
 WHERE   name = 'show advanced options'
         AND value = 0
+UNION ALL             
+SELECT  'Configuration' [Type] ,
+        @@SERVERNAME ,
+        'exec sp_configure ''' + name + ''',' + [OS_RAM] +';
+reconfigure with override'
+FROM    sys.configurations C
+		CROSS APPLY(SELECT TOP 1 CONVERT(VARCHAR(25),Internal_Value * 0.8) [OS_RAM] FROM @MSver S WHERE Name = 'PhysicalMemory')CA
+WHERE   name = 'max server memory (MB)'
+        AND value = 2147483647
 UNION ALL
 SELECT  'Configuration' [Type] ,
         @@SERVERNAME ,
         'exec sp_configure ''' + name + ''',1;
-reconfigure'
+reconfigure with override'
 FROM    sys.configurations
 WHERE   name = 'backup compression default'
         AND value = 0
@@ -602,7 +795,7 @@ UNION ALL
 SELECT  'Configuration' [Type] ,
         @@SERVERNAME ,
         'exec sp_configure ''' + name + ''',1;
-reconfigure'
+reconfigure with override'
 FROM    sys.configurations
 WHERE   name = 'optimize for ad hoc workloads'
         AND value = 0
@@ -610,7 +803,7 @@ UNION ALL
 SELECT  'Configuration' [Type] ,
         @@SERVERNAME ,
         'exec sp_configure ''' + name + ''',1;
-reconfigure'
+reconfigure with override'
 FROM    sys.configurations
 WHERE   name = 'Database Mail XPs'
         AND value = 0
@@ -618,7 +811,7 @@ UNION ALL
 SELECT  'Configuration' [Type] ,
         @@SERVERNAME ,
         'exec sp_configure ''' + name + ''',50;
-reconfigure'
+reconfigure with override'
 FROM    sys.configurations
 WHERE   name = 'cost threshold for parallelism'
         AND value = 5
@@ -626,7 +819,7 @@ UNION ALL
 SELECT  'Configuration' [Type] ,
         @@SERVERNAME ,
         'exec sp_configure ''' + name + ''',0;
-reconfigure'
+reconfigure with override'
 FROM    sys.configurations
 WHERE   name = 'max degree of parallelism'
         AND value != 0
@@ -637,7 +830,7 @@ UNION ALL
 SELECT  'Configuration' [Type] ,
         @@SERVERNAME ,
         'exec sp_configure ''' + name + ''',1;
-reconfigure'
+reconfigure with override'
 FROM    sys.configurations
 WHERE   name = 'max degree of parallelism'
         AND value != 1
@@ -649,7 +842,7 @@ UNION ALL
 SELECT  'Configuration' [Type] ,
         @@SERVERNAME ,
         'exec sp_configure ''' + name + ''',1;
-reconfigure'
+reconfigure with override'
 FROM    sys.configurations
 WHERE   name = 'remote admin connections'
         AND value = 0
@@ -663,30 +856,21 @@ WHERE   owner_sid != 0x01
 UNION ALL
 SELECT  'SQL Error Log' ,
         @@SERVERNAME ,
-        'USE [master]
-GO
-EXEC xp_instance_regwrite N''HKEY_LOCAL_MACHINE'', N''Software\\Microsoft\\MSSQLServer\\MSSQLServer'', N''NumErrorLogs'', REG_DWORD, 30'
-WHERE   EXISTS ( SELECT TOP 1
-                        1
-                 FROM   #SR_reg
-                 WHERE  keyname = 'Number Error Logs'
-                        AND CurrentInstance = 1
-                        AND value < 30 )
+        'USE [master];
+EXEC xp_instance_regwrite N''HKEY_LOCAL_MACHINE'', N''Software\Microsoft\MSSQLServer\MSSQLServer'', N''NumErrorLogs'', REG_DWORD, 30'
+WHERE @IsLinux = 0 AND (EXISTS ( SELECT TOP 1 1 FROM #SR_reg WHERE keyname = 'Number Error Logs' AND CurrentInstance = 1 AND value < 30 ) OR NOT EXISTS ( SELECT TOP 1 1 FROM #SR_reg WHERE keyname = 'Number Error Logs' AND CurrentInstance = 1))
 UNION ALL
 SELECT  'SQL Error Log' ,
         @@SERVERNAME ,
         'BEGIN TRANSACTION
-DECLARE @ReturnCode INT
+DECLARE @ReturnCode INT;
 SELECT @ReturnCode = 0
-/****** Object:  JobCategory [DBA]    Script Date: 26/07/2016 12:44:04 ******/
 IF NOT EXISTS (SELECT name FROM msdb.dbo.syscategories WHERE name=N''DBA'' AND category_class=1)
 BEGIN
-EXEC @ReturnCode = msdb.dbo.sp_add_category @class=N''JOB'', @type=N''LOCAL'', @name=N''DBA''
-IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
-
+	EXEC @ReturnCode = msdb.dbo.sp_add_category @class=N''JOB'', @type=N''LOCAL'', @name=N''DBA'';
+	IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback;
 END
-
-DECLARE @jobId BINARY(16)
+DECLARE @jobId BINARY(16);
 EXEC @ReturnCode =  msdb.dbo.sp_add_job @job_name=N''_Admin_ :: CycleErrorLog'', 
              @enabled=1, 
              @notify_level_eventlog=0, 
@@ -696,9 +880,8 @@ EXEC @ReturnCode =  msdb.dbo.sp_add_job @job_name=N''_Admin_ :: CycleErrorLog'',
              @delete_level=0, 
              @description=N''sp_cycle_errorlog.'', 
              @category_name=N''DBA'', 
-             @owner_login_name=N''sa'', @job_id = @jobId OUTPUT
-IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
-/****** Object:  Step [CycleErrorLog]    Script Date: 26/07/2016 12:44:04 ******/
+             @owner_login_name=N''sa'', @job_id = @jobId OUTPUT;
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback;
 EXEC @ReturnCode = msdb.dbo.sp_add_jobstep @job_id=@jobId, @step_name=N''CycleErrorLog'', 
              @step_id=1, 
              @cmdexec_success_code=0, 
@@ -711,10 +894,10 @@ EXEC @ReturnCode = msdb.dbo.sp_add_jobstep @job_id=@jobId, @step_name=N''CycleEr
              @os_run_priority=0, @subsystem=N''TSQL'', 
              @command=N''EXEC sp_cycle_errorlog;'', 
              @database_name=N''master'', 
-             @flags=0
-IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
-EXEC @ReturnCode = msdb.dbo.sp_update_job @job_id = @jobId, @start_step_id = 1
-IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+             @flags=0;
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback;
+EXEC @ReturnCode = msdb.dbo.sp_update_job @job_id = @jobId, @start_step_id = 1;
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback;
 EXEC @ReturnCode = msdb.dbo.sp_add_jobschedule @job_id=@jobId, @name=N''MidNight'', 
              @enabled=1, 
              @freq_type=4, 
@@ -727,73 +910,72 @@ EXEC @ReturnCode = msdb.dbo.sp_add_jobschedule @job_id=@jobId, @name=N''MidNight
              @active_end_date=99991231, 
              @active_start_time=1, 
              @active_end_time=235959, 
-             @schedule_uid=N''994a993a-227f-463f-9742-f2cba8623403''
-IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
-EXEC @ReturnCode = msdb.dbo.sp_add_jobserver @job_id = @jobId, @server_name = N''(local)''
-IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
-COMMIT TRANSACTION
-GOTO EndSave
+             @schedule_uid=N''994a993a-227f-463f-9742-f2cba8623403'';
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback;
+EXEC @ReturnCode = msdb.dbo.sp_add_jobserver @job_id = @jobId, @server_name = N''(local)'';
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback;
+COMMIT TRANSACTION;
+GOTO EndSave;
 QuitWithRollback:
-    IF (@@TRANCOUNT > 0) ROLLBACK TRANSACTION
+    IF (@@TRANCOUNT > 0) ROLLBACK TRANSACTION;
 EndSave:'
-WHERE   NOT EXISTS ( SELECT TOP 1
-                            1
-                     FROM   msdb.[dbo].[sysjobs]
-                     WHERE  name = '_Admin_ :: CycleErrorLog' )
-        AND EXISTS ( SELECT TOP 1
-                            1
-                     FROM   #SR_reg
-                     WHERE  keyname = 'Number Error Logs'
-                            AND CurrentInstance = 1
-                            AND value < 30 )
+WHERE   NOT EXISTS ( SELECT TOP 1 1 FROM msdb.[dbo].[sysjobs] WHERE [name] = N'_Admin_ :: CycleErrorLog' )
+        AND (EXISTS ( SELECT TOP 1 1 FROM #SR_reg WHERE keyname = 'Number Error Logs' AND CurrentInstance = 1 AND value < 30 ) OR NOT EXISTS ( SELECT TOP 1 1 FROM #SR_reg WHERE keyname = 'Number Error Logs' AND CurrentInstance = 1))
 UNION ALL
 SELECT  'Windows Power Plan' ,
         @@SERVERNAME ,
         'USE [master]
 GO
-EXEC xp_instance_regwrite N''HKEY_LOCAL_MACHINE'', N''SYSTEM\\ControlSet001\\Control\\Power\\User\\PowerSchemes'', N''ActivePowerScheme'', REG_SZ, ''8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c''' Script
-WHERE   EXISTS ( SELECT TOP 1
-                        1
+BEGIN TRY
+	EXEC xp_instance_regwrite N''HKEY_LOCAL_MACHINE'', N''SYSTEM\ControlSet001\Control\Power\User\PowerSchemes'', N''ActivePowerScheme'', REG_SZ, ''8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c''
+	DECLARE @PowerShell VARCHAR(4000);
+	DECLARE @output TABLE (line VARCHAR(255));
+	SET @PowerShell = ''powershell.exe -noprofile -command "Try {$HighPerf = powercfg -l | %{if($_.contains(''''High performance'''')) {$_.split()[3]}} $CurrPlan = $(powercfg -getactivescheme).split()[3] IF ($CurrPlan -ne $HighPerf) {powercfg -setactive $HighPerf}} Catch {Write-Warning -Message ''''Access is denied''''}"'';
+	INSERT @output
+	EXEC master.sys.xp_cmdshell @PowerShell;
+
+	IF EXISTS(SELECT TOP 1 1 FROM @output WHERE line = ''WARNING: Access is denied'')
+		RAISERROR(''Unable to set power plan to "High Performance"'',16,1);
+END TRY
+BEGIN CATCH
+	DECLARE @err NVARCHAR(2048);
+	SET @err = ERROR_MESSAGE() + ''
+Try to change it manually - https://blog.sqlauthority.com/2015/04/27/sql-server-using-high-performance-power-plan-for-sql-server
+You can read more - 
+	https://blogs.msdn.microsoft.com/cindygross/2011/03/09/power-saving-options-on-sql-server
+	https://support.microsoft.com/en-us/help/2207548/slow-performance-on-windows-server-when-using-the-balanced-power-plan''
+	RAISERROR(@err,16,1);
+END CATCH' Script
+WHERE   EXISTS ( SELECT TOP 1 1
                  FROM   #SR_reg
                  WHERE  CurrentInstance = 1
                         AND keyname = 'Power Plan'
                         AND value != 'High performance' )
+		AND @IsLinux = 0
 UNION ALL
 SELECT  'Performance' ,
         'tempdb' ,
-        CASE WHEN mf.database_id IS NULL
-             THEN 'USE [master]
-GO
+        CASE WHEN df.file_guid IS NULL
+             THEN 'USE [master];
 ALTER DATABASE [tempdb] ADD FILE ( NAME = N''tempdev'
                   + CONVERT(VARCHAR(3), Num.n) + ''', FILENAME = N'''
                   + FileName + ''' , SIZE = ' + maxS.size + ' , FILEGROWTH = '
-                  + f1.growth + ' )
-GO'          WHEN MakeSameSize.Script IS NOT NULL THEN MakeSameSize.Script
+                  + f1.growth + ' );
+'          WHEN MakeSameSize.Script IS NOT NULL THEN MakeSameSize.Script
              ELSE NULL
         END
-FROM    ( SELECT    1 n
-          UNION ALL
-          SELECT    2 n
-          UNION ALL
-          SELECT    3 n
-          UNION ALL
-          SELECT    4 n
-          UNION ALL
-          SELECT    5 n
-          UNION ALL
-          SELECT    6 n
-          UNION ALL
-          SELECT    7 n
-          UNION ALL
-          SELECT    8 n
+FROM    (	SELECT	v.number AS [n]
+			FROM	master..spt_values v
+			WHERE	v.[Type] = 'P' 
+					AND Number BETWEEN 1 AND 32
         ) Num
         CROSS APPLY ( SELECT TOP 1
                                 LEFT(physical_name,
-                                     LEN(physical_name) - CHARINDEX('\',
+                                     LEN(physical_name) - CHARINDEX(@Divider,
                                                               REVERSE(physical_name),
                                                               1) + 1)
                                 + REPLACE(REVERSE(LEFT(REVERSE(physical_name),
-                                                       CHARINDEX('\',
+                                                       CHARINDEX(@Divider,
                                                               REVERSE(physical_name),
                                                               1) - 1)), '.mdf',
                                           CONVERT(VARCHAR(3), Num.n) + '.ndf') FileName ,
@@ -805,34 +987,32 @@ FROM    ( SELECT    1 n
                                           + 'KB'
                                      ELSE '256MB'
                                 END growth
-                      FROM      sys.master_files imf
-                      WHERE     database_id = 2
-                                AND file_id = 1
+                      FROM      tempdb.sys.database_files
+                      WHERE     file_id = 1
                     ) f1
         CROSS APPLY ( SELECT    CONVERT(VARCHAR(50), MAX(size * 8 / 1024))
                                 + 'MB' size ,
                                 MAX(size) OriginalSize
-                      FROM      sys.master_files imf
-                      WHERE     database_id = 2
-                                AND imf.type = 0
+                      FROM      tempdb.sys.database_files imf
+                      WHERE     imf.type = 0
                     ) maxS
-        LEFT JOIN sys.master_files mf ON CASE WHEN mf.file_id > 1
-                                              THEN mf.file_id - 1
+        LEFT JOIN tempdb.sys.database_files df ON CASE WHEN df.file_id > 1
+                                              THEN df.file_id - 1
                                               ELSE 1
                                          END = Num.n
-                                         AND database_id = 2
                                          AND type = 0
         OUTER APPLY ( SELECT TOP 1
                                 'ALTER DATABASE [tempdb] MODIFY FILE ( NAME = N'''
-                                + mf.name + ''', SIZE = ' + maxS.size + ');' Script
-                      WHERE     maxS.OriginalSize != mf.size
+                                + df.name + ''', SIZE = ' + maxS.size + ');' Script
+                      WHERE     maxS.OriginalSize != df.size
                     ) MakeSameSize
-WHERE   Num.n <= ( SELECT   CASE WHEN cpu_count > 8 THEN 8
+WHERE   Num.n <= ( SELECT   CASE WHEN cpu_count >= 8 AND @tempDBDataFiles <= 8 THEN 8
+								 WHEN cpu_count >= 8 AND @tempDBDataFiles > 8 THEN @tempDBDataFiles
                                  ELSE cpu_count
                             END
                    FROM     sys.dm_os_sys_info
                  )
-        AND ( mf.database_id IS NULL
+        AND ( df.file_guid IS NULL
               OR MakeSameSize.Script IS NOT NULL
             )
 UNION ALL
@@ -842,17 +1022,20 @@ UNION ALL
 SELECT  'TraceFlag' ,
         @@SERVERNAME ,
         Script
-FROM    ( SELECT    1117 TraceFlag ,
-                    'DBCC TRACEON (1117, -1); ' Script
+FROM    ( SELECT    1117 AS [TraceFlag] ,
+                    'DBCC TRACEON (1117, -1); ' Script WHERE @MajorVersion < 1300 --SQL Server 2016
           UNION ALL
           SELECT    1118 ,
-                    'DBCC TRACEON (1118, -1); ' Script
+                    'DBCC TRACEON (1118, -1); ' Script WHERE @MajorVersion < 1300 --SQL Server 2016
           UNION ALL
           SELECT    1222 ,
-                    'DBCC TRACEON (1222, -1); ' Script
+                    'DBCC TRACEON (1222, -1); ' Script WHERE @MajorVersion < 1300 --SQL Server 2016
           UNION ALL
           SELECT    3226 ,
-                    'DBCC TRACEON (3226, -1); ' Script
+                    'DBCC TRACEON (3226, -1); ' Script WHERE @MajorVersion < 1300 --SQL Server 2016
+          UNION ALL
+          SELECT    1211 ,
+                    'DBCC TRACEON (1211, -1); /*resolve-blocking-problems-that-are-caused-by-lock-escalation https://support.microsoft.com/en-us/help/323630/how-to-resolve-blocking-problems-that-are-caused-by-lock-escalation-in*/' Script 
         ) M
         LEFT JOIN #TraceFlag TF ON TF.TraceFlag = M.TraceFlag
 WHERE   TF.TraceFlag IS NULL
@@ -862,27 +1045,28 @@ SELECT  Type ,
         Script
 FROM    @SharePointAG
 UNION ALL 
-
-SELECT	'Best Practice' ,
-        db.name ,'USE ' + QUOTENAME(db.name)+ '
-GO
+SELECT	'Secondary FileGroup' ,
+        db.name ,'USE ' + QUOTENAME(db.name)+ ';
 IF NOT EXISTS (SELECT TOP 1 1 FROM sys.filegroups WHERE [name] = N''SECONDARY'')
 	ALTER DATABASE ' + QUOTENAME(db.name)+ ' ADD FILEGROUP [SECONDARY];
-GO' 
+' 
 FROM	sys.databases db
 		CROSS APPLY (SELECT COUNT(DISTINCT mf.data_space_id)[NumberOfFileGroups] FROM sys.master_files mf WHERE mf.database_id = db.database_id AND mf.[type] = 0)ds
 WHERE	db.database_id > 4
 		AND [ds].[NumberOfFileGroups] = 1
+<<<<<<< HEAD
 		AND @SecondFileBP = 1
+=======
+		AND @SecondaryFileGroup = 1
+>>>>>>> origin/master
 UNION ALL 
-SELECT	'Performance' ,
-        db.name ,'USE [master]
-GO
+SELECT	'2 Files Secondary FileGroup' ,
+        db.name ,'USE [master];
 ALTER DATABASE ' + QUOTENAME(db.name)+ ' ADD FILE ( NAME = N''' + REPLACE(f1.[name],'<##>',CONVERT(VARCHAR(3), v.Number)) 
                   + ''', FILENAME = N'''
                   + REPLACE(f1.[FileName],'<##>',CONVERT(VARCHAR(3), v.Number)) + ''' , SIZE = ' + f1.size + ' , FILEGROWTH = '
                   + f1.growth + ' ) TO FILEGROUP [SECONDARY]
-GO'		
+'		
 FROM	sys.databases db
 		INNER JOIN [master]..spt_values v ON v.[Type] = 'P' 
 		CROSS APPLY (SELECT COUNT(1)[NumberOfFiles] FROM sys.master_files mf WHERE mf.database_id = db.database_id AND mf.[type] = 0)fn
@@ -906,27 +1090,39 @@ FROM	sys.databases db
 WHERE	db.database_id > 4
 		AND v.Number BETWEEN 2 AND 3
 		AND fn.NumberOfFiles = 1
+<<<<<<< HEAD
 		AND @SecondFileBP = 1
+=======
+		AND @SecondaryFileGroup = 1
+>>>>>>> origin/master
 UNION ALL 
 
-SELECT	'Best Practice' ,
+SELECT	'Default Filegroup' ,
         db.name ,'USE ' + QUOTENAME(db.name)+ '
-GO
 IF NOT EXISTS (SELECT TOP 1 1 FROM sys.filegroups WHERE is_default = 1 AND name = N''SECONDARY'') ALTER DATABASE ' + QUOTENAME(db.name)+ ' MODIFY FILEGROUP [SECONDARY] DEFAULT;' 
 FROM	sys.databases db
 		CROSS APPLY (SELECT COUNT(DISTINCT mf.data_space_id)[NumberOfFileGroups] FROM sys.master_files mf WHERE mf.database_id = db.database_id AND mf.[type] = 0)ds
 WHERE	db.database_id > 4
 		AND [ds].[NumberOfFileGroups] = 1
+<<<<<<< HEAD
 		AND @SecondFileBP = 1
+=======
+		AND @SecondaryFileGroup = 1
+>>>>>>> origin/master
 UNION ALL 
 
 SELECT	'Best Practice' ,
-        db.name ,'USE [master]
-GO
+        db.name ,'USE [master];
 ALTER DATABASE ' + QUOTENAME(db.name)+ ' SET RECOVERY SIMPLE WITH NO_WAIT;
-GO' 
+' 
 FROM	sys.databases db
 WHERE	db.database_id = 3
-		AND db.recovery_model = 1;
+		AND db.recovery_model = 1
+
+UNION ALL
+SELECT	Type,
+        [Database Name],
+        Script
+FROM	@Scripts;
 DROP TABLE #TraceFlag;
---select * from #SR_reg
+--select * from #SR_reg;
